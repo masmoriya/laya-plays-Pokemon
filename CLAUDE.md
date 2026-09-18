@@ -49,7 +49,13 @@ cell in the collision grid (`route.py:44`).
 Blocked on the user: a Pokemon Red ROM path (`--rom`), and Vercel AI Gateway paid credits
 for the remaining recordings (see `../CLAUDE.md`, "Real Jev access").
 
-## Next session (deep review)
+## Next sessions
+
+Two prompts are checked in: `sessions/01-review.md` (brutal review, fixes, the README,
+repo hygiene, the new name) and `sessions/02-demo.md` (overlay tuned for the camera, shot
+list, recording recipe, the X thread). Run them in that order, each in its own session.
+
+### Review targets
 
 Start with: `decode.py` against `wram.asm` for any address not in the nine verified ones;
 the readiness predicate and latch in `loop.py` (never exercised on real frames);
