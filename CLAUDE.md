@@ -4,8 +4,8 @@ Pokemon Red on PyBoy: code decodes RAM into a symbolic state, owns the goal stac
 waypoint movement, Jev picks among legal actions at branches. Live probability overlay.
 Read `../CLAUDE.md` for the monorepo rules, then `CONTEXT.md` here in full.
 
-Verdict: check the newest `REVIEW-*.md`; round two fixed the starting map (Red's house 2F,
-`$26`), the `wIsInBattle` values, the calibration target, and the decisions/sec method.
+Verdict after three review rounds: **ready to build**. The run starts in Red's house 2F
+(`$26`); the input-readiness predicate is discovered with `jpp probe` in task 2, not assumed.
 
 Project-specific rules:
 - The ROM is never in the repo. `ROM_PATH` env, user supplied. Save states are gitignored.
