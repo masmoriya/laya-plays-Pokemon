@@ -101,6 +101,7 @@ GHTING=0.5,ROCK>FIRE=2.0,ROCK>FLYING=2.0,ROCK>GROUND=0.5,ROCK>ICE=2.0,WATER>DRAG
 >FIRE=2.0,WATER>GRASS=0.5,WATER>GROUND=2.0,WATER>ROCK=2.0,WATER>WATER=0.5
 """
 
+
 def _pairs(blob):
     return (e.split("=", 1) for e in blob.replace("\n", "").split(",") if e)
 
@@ -109,7 +110,9 @@ SPECIES = {int(k): v for k, v in _pairs(_SPECIES)}
 TYPES = {int(k): v for k, v in _pairs(_TYPES)}
 # move id: (name, type, base power, max PP)
 MOVES = {
-    int(k): (lambda n, t, p, pp: (n.replace("_", " "), t, int(p), int(pp)))(*v.split(":"))
+    int(k): (lambda n, t, p, pp: (n.replace("_", " "), t, int(p), int(pp)))(
+        *v.split(":")
+    )
     for k, v in _pairs(_MOVES)
 }
 # (attacking type, defending type): multiplier; unlisted pairs are 1.0

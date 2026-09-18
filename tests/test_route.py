@@ -4,7 +4,14 @@ from jpp.goals import GOALS
 
 import make_ram
 
-BLOCKED, FREE = 1, route.WALKABLE
+# PyBoy's collision matrix is `np.isin(tiles, walkable_tiles_indexes)`, so 1 is walkable.
+# Written out rather than taken from route.WALKABLE: a test that reads the constant it is
+# checking passes whichever way the constant is wrong.
+FREE, BLOCKED = 1, 0
+
+
+def test_the_grid_says_one_for_walkable():
+    assert route.WALKABLE == FREE
 
 
 def grid(*free_directions):
@@ -12,14 +19,19 @@ def grid(*free_directions):
     g = [[BLOCKED] * 20 for _ in range(18)]
     for d in free_directions:
         dx, dy = route._DELTA[d]
-        g[route.PLAYER_ROW + dy * route.STEP_TILES][route.PLAYER_COL + dx * route.STEP_TILES] = FREE
+        g[route.PLAYER_ROW + dy * route.STEP_TILES][
+            route.PLAYER_COL + dx * route.STEP_TILES
+        ] = FREE
     return g
 
 
-def state_at(map_id, x, y):
+def state_at(map_id, x, y, events=()):
     ram = make_ram.overworld()
     ram[S.CUR_MAP] = map_id
     ram[S.X_COORD], ram[S.Y_COORD] = x, y
+    for bit in events:
+        addr, offset = S.event_address(bit)
+        ram[addr] |= 1 << offset
     return decode(bytes(ram))
 
 
@@ -28,11 +40,29 @@ def goal(name):
 
 
 def test_every_goal_with_walking_has_a_waypoint_on_every_map_it_crosses():
-    assert route.WAYPOINTS["leave_house"][S.REDS_HOUSE_2F] == (7, 1)  # RedsHouse2F.asm warp
-    assert route.WAYPOINTS["leave_house"][S.REDS_HOUSE_1F] == (2, 7)  # RedsHouse1F.asm warp
-    assert route.WAYPOINTS["get_starter"][S.PALLET_TOWN] == (12, 11)  # PalletTown.asm warp
+    # RedsHouse2F.asm and RedsHouse1F.asm warps
+    assert route.WAYPOINTS["leave_house"][S.REDS_HOUSE_2F] == (7, 1)
+    assert route.WAYPOINTS["leave_house"][S.REDS_HOUSE_1F] == (2, 7)
     assert route.WAYPOINTS["win_lab_rival"] == {}  # the battle happens where we stand
     assert set(route.WAYPOINTS) == {g.name for g in GOALS}
+
+
+def test_pallet_town_goes_to_the_north_edge_before_the_lab():
+    """Oak only intercepts at wYCoord == 1, and nothing in the lab arms until he does."""
+    st = state_at(S.PALLET_TOWN, 5, 5)
+    assert route.waypoint_for(goal("get_starter"), st) == route.OAK_TRIGGER
+    assert route.OAK_TRIGGER[1] == 1
+
+    followed = state_at(S.PALLET_TOWN, 5, 5, events={S.EVENT_FOLLOWED_OAK_INTO_LAB})
+    assert route.waypoint_for(goal("get_starter"), followed) == route.LAB_DOOR
+
+
+def test_the_lab_waypoint_is_a_poke_ball_only_once_oak_has_asked():
+    st = state_at(S.OAKS_LAB, 5, 6)
+    assert route.waypoint_for(goal("get_starter"), st) == (5, 3)  # Oak
+
+    asked = state_at(S.OAKS_LAB, 5, 6, events={S.EVENT_OAK_ASKED_TO_CHOOSE_MON})
+    assert route.waypoint_for(goal("get_starter"), asked) == route.CHARMANDER_BALL
 
 
 def test_waypoint_for_returns_none_off_route():

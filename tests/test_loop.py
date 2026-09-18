@@ -53,14 +53,34 @@ def goal(name):
     return next(g for g in goals.GOALS if g.name == name)
 
 
-def test_input_ready_reads_the_two_wram_bytes():
+def test_input_ready_is_per_button_because_joy_ignore_is_a_mask():
     ram = make_ram.overworld()
-    assert loop.input_ready(decode(bytes(ram)))
+    assert loop.input_ready(decode(bytes(ram)), "a")
+    assert loop.input_ready(decode(bytes(ram)), "up")
+
+    # what scripted dialogue sets: movement locked, A deliberately left open so the text
+    # can be advanced. Waiting for the whole byte to clear deadlocks against the script.
+    ram[S.JOY_IGNORE] = S.PAD_SELECT | S.PAD_START | S.PAD_CTRL_PAD
+    assert loop.input_ready(decode(bytes(ram)), "a")
+    assert not loop.input_ready(decode(bytes(ram)), "up")
+
     ram[S.JOY_IGNORE] = 0xFF
-    assert not loop.input_ready(decode(bytes(ram)))
+    assert not loop.input_ready(decode(bytes(ram)), "a")
+
     ram[S.JOY_IGNORE] = 0
-    ram[S.WALK_COUNTER] = 3
-    assert not loop.input_ready(decode(bytes(ram)))
+    ram[S.WALK_COUNTER] = 3  # mid-step: another step is refused, A is not
+    assert not loop.input_ready(decode(bytes(ram)), "up")
+    assert loop.input_ready(decode(bytes(ram)), "a")
+
+
+def test_a_text_box_still_gets_its_a_press_while_the_script_owns_the_pad():
+    """The regression that would hang every run: Oak's speech never advances."""
+    ram = make_ram.overworld()
+    ram[S.TEXT_BOX_ID] = 0x01
+    ram[S.JOY_IGNORE] = S.PAD_SELECT | S.PAD_START | S.PAD_CTRL_PAD
+    driver = loop.Driver(FakeEmulator(ram))
+    driver.tick()
+    assert loop.classify(driver, goal("get_starter"), (12, 11)) == ("press", "a")
 
 
 def test_a_tick_that_is_not_ready_makes_no_decision():
@@ -69,6 +89,39 @@ def test_a_tick_that_is_not_ready_makes_no_decision():
     driver = loop.Driver(FakeEmulator(ram))
     driver.tick()
     assert loop.classify(driver, goal("get_starter"), (12, 11)) == ("wait", None)
+
+
+def test_a_direction_that_never_moves_stops_being_pressed():
+    """Axis-first stepping walks into a wall forever without this."""
+    ram = make_ram.overworld()
+    ram[S.CUR_MAP], ram[S.X_COORD], ram[S.Y_COORD] = S.PALLET_TOWN, 10, 8
+    emu = FakeEmulator(ram, walls={(11, 8)})
+    driver = loop.Driver(emu)
+    driver.tick()
+    waypoint = (12, 11)
+    for _ in range(loop.BLOCKED_AFTER):
+        assert loop.classify(driver, goal("reach_viridian"), waypoint) == (
+            "press",
+            "right",
+        )
+        driver.press("right")
+    assert driver.blocked("right")
+    action, payload = loop.classify(driver, goal("reach_viridian"), waypoint)
+    assert (action, payload) == ("press", "down")  # the only free step still closing in
+
+
+def test_an_object_one_tile_away_is_talked_to_not_walked_into():
+    ram = make_ram.overworld()
+    ram[S.CUR_MAP], ram[S.X_COORD], ram[S.Y_COORD] = S.OAKS_LAB, 5, 3
+    emu = FakeEmulator(ram, walls={(6, 3)})  # Charmander's poke ball
+    driver = loop.Driver(emu)
+    driver.tick()
+    for _ in range(loop.BLOCKED_AFTER):
+        driver.press("right")
+    assert loop.classify(driver, goal("get_starter"), route.CHARMANDER_BALL) == (
+        "press",
+        "a",
+    )
 
 
 def test_the_overworld_walks_toward_the_waypoint_without_asking():

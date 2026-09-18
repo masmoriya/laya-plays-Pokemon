@@ -19,6 +19,7 @@ class Branch:
     state: dict
     options: dict
 
+
 POTION = 0x14  # constants/item_constants.asm
 ITEM_NAMES = {POTION: "Potion"}
 POTION_HEAL = 20
@@ -36,6 +37,15 @@ def bag(mem) -> dict[int, int]:
     }
 
 
+def bench(state) -> list:
+    """Party members that can be switched in: not fainted, not the one already out.
+
+    The one already out is the slot wPlayerMonNumber names, not "the one with the same
+    species": two of a species would otherwise hide each other.
+    """
+    return [m for m in state.party if not m.fainted and m.slot - 1 != state.active_slot]
+
+
 def battle_options(state, items: dict[int, int] | None = None) -> dict[str, str]:
     """Moves with PP left, healthy bench members, and a Potion if one is in the bag."""
     active, foe = state.battle.active, state.battle.opponent
@@ -43,9 +53,7 @@ def battle_options(state, items: dict[int, int] | None = None) -> dict[str, str]
     for name, pp in zip(active.moves, active.pp):
         if pp > 0:
             out[f"use_move_{_slug(name)}"] = facts.describe_move(name, pp, foe.types)
-    for mon in state.party:
-        if mon.fainted or mon.species == active.species:
-            continue
+    for mon in bench(state):
         out[f"switch_to_{_slug(mon.species)}"] = facts.describe_switch(mon)
     missing = active.max_hp - active.hp
     if items and items.get(POTION) and missing:
@@ -66,11 +74,7 @@ def battle_branch(state, goal, items=None, turn=None) -> Branch:
             "active": facts.battle_summary(active),
             "opponent": facts.battle_summary(foe),
         },
-        "party": [
-            facts.battle_summary(m) | {"slot": m.slot}
-            for m in state.party
-            if not m.fainted and m.species != active.species
-        ],
+        "party": [facts.battle_summary(m) | {"slot": m.slot} for m in bench(state)],
     }
     if turn is not None:
         body["battle"]["turn"] = turn
@@ -94,22 +98,61 @@ def tie_branch(state, goal, waypoint, free: list[str]) -> Branch:
     return Branch("tie", body, opts)
 
 
+VISIBLE_TEXT_CHARS = 180  # two text box lines and a bit, CONTEXT section 4 risk 3
+
+
 def dialogue_branch(state, goal, visible_text: str, choices: list[str]) -> Branch:
+    """ponytail: no caller in `loop.classify` yet.
+
+    v0.1 answers every non-battle text box with A, which is what the route needs, so
+    nothing decodes the tilemap into `visible_text` and this builder is exercised by
+    fixtures only. The truncation is here because NPC text is full of imperatives and the
+    model does not treat state as untrusted; whoever wires the tilemap reader inherits it
+    rather than having to remember it.
+    """
     opts = {f"answer_{_slug(c)}": f"answer {c}" for c in choices}
     body = {
         "goal": goal.sentence,
-        "visible_text": visible_text,
+        "visible_text": visible_text[:VISIBLE_TEXT_CHARS],
         "options": opts,
     }
     return Branch("dialogue", body, opts)
 
 
 # --- turning a chosen option back into button presses ---
-# The Gen 1 battle menu is FIGHT / PKMN on the top row, ITEM / RUN below.
-# ponytail: this cursor choreography is written from the menu layout, not measured. Run
-# `jpp probe` on a ROM and watch wCurrentMenuItem while pressing, then fix any sequence
-# that does not land. A wrong sequence costs a wasted turn, never a corrupted save.
-MENU_ROOT = {"fight": [], "pkmn": ["right"], "item": ["down"], "run": ["right", "down"]}
+# The Gen 1 battle menu is two columns, ids 0 and 1 down the left, 2 and 3 down the right
+# (`DisplayBattleMenu`, engine/battle/core.asm: "sub 2 ; check if the cursor is in the
+# left column", and +2 again on the A press):
+#
+#     FIGHT (0)   PKMN (2)
+#     ITEM  (1)   RUN  (3)
+#
+# Every one of these menus remembers its cursor. The battle menu restores
+# wBattleAndStartSavedMenuItem, the move list starts on wPlayerMoveListIndex, the party
+# list on wPartyAndBillsPCSavedMenuItem. So the sequence is a delta from where the cursor
+# actually is, never a path from an assumed corner: on turn 2 onwards the corner is wrong
+# and a blind sequence confirms the wrong item.
+ROOT_CELL = {"fight": (0, 0), "item": (0, 1), "pkmn": (1, 0), "run": (1, 1)}
+
+
+def _root_path(state, entry: str) -> list[str]:
+    saved = state.battle_menu_item & 0b11
+    return _walk((saved // 2, saved % 2), ROOT_CELL[entry])
+
+
+def _walk(current: tuple[int, int], target: tuple[int, int]) -> list[str]:
+    (c0, r0), (c1, r1) = current, target
+    across = ["right"] * (c1 - c0) if c1 > c0 else ["left"] * (c0 - c1)
+    down = ["down"] * (r1 - r0) if r1 > r0 else ["up"] * (r0 - r1)
+    return across + down
+
+
+def _list_path(current: int, target: int) -> list[str]:
+    return (
+        ["down"] * (target - current)
+        if target > current
+        else ["up"] * (current - target)
+    )
 
 
 def buttons_for(state, branch: Branch, option: str) -> list[str]:
@@ -119,21 +162,31 @@ def buttons_for(state, branch: Branch, option: str) -> list[str]:
         return ["a"]
     active = state.battle.active
     if option.startswith("use_move_"):
-        names = [n for n, pp in zip(active.moves, active.pp) if pp > 0]
-        index = names.index(
-            next(n for n in names if _slug(n) == option[len("use_move_") :])
+        # the menu lists every move the mon knows, PP or not, so the row is the move's
+        # own slot and not its position among the legal ones
+        wanted = option[len("use_move_") :]
+        index = next(i for i, n in enumerate(active.moves) if _slug(n) == wanted)
+        return (
+            _root_path(state, "fight")
+            + ["a"]
+            + _list_path(state.move_list_index, index)
+            + ["a"]
         )
-        return MENU_ROOT["fight"] + ["a"] + ["down"] * index + ["a"]
     if option.startswith("switch_to_"):
-        bench = [m for m in state.party if not m.fainted]
-        index = next(
-            i
-            for i, m in enumerate(bench)
-            if _slug(m.species) == option[len("switch_to_") :]
+        # likewise the party list shows fainted members; the row is the slot
+        wanted = option[len("switch_to_") :]
+        slot = next(m.slot for m in state.party if _slug(m.species) == wanted)
+        return (
+            _root_path(state, "pkmn")
+            + ["a"]
+            + _list_path(state.party_menu_item, slot - 1)
+            + ["a", "a"]
         )
-        return MENU_ROOT["pkmn"] + ["a"] + ["down"] * index + ["a", "a"]
     if option == "use_item_potion":
-        return MENU_ROOT["item"] + ["a", "a", "a"]
+        # ponytail: the bag holds one Potion at this point in the game, so the item row is
+        # row 0 and wBagSavedMenuItem cannot have moved. A second item needs the same
+        # delta treatment as the two lists above.
+        return _root_path(state, "item") + ["a", "a", "a"]
     if option == "run_away":
-        return MENU_ROOT["run"] + ["a"]
+        return _root_path(state, "run") + ["a"]
     return ["a"]

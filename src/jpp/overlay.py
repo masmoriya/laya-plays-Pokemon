@@ -88,8 +88,9 @@ class Overlay:
     def feed(self, record: dict, labelled=None):
         self.record = record
         self.target = dict(record.get("probabilities") or {})
-        for key in self.target:
-            self.shown.setdefault(key, 0.0)
+        # keep only the options this decision offered: a move from a previous battle
+        # would otherwise sit at zero in the bar list for the rest of the run
+        self.shown = {k: self.shown.get(k, 0.0) for k in self.target}
         self.changed_at = time.monotonic()
         self.decisions += 1
         self.tokens += record.get("input_tokens") or 0
@@ -196,7 +197,9 @@ class Overlay:
             self.screen.blit(
                 number, (track_x + track_w + value_w - number.get_width(), y + 5)
             )
-        self._draw_nouls(left, BAR_TOP + len(ordered[:BAR_MAX]) * (BAR_H + BAR_GAP) + 14)
+        self._draw_nouls(
+            left, BAR_TOP + len(ordered[:BAR_MAX]) * (BAR_H + BAR_GAP) + 14
+        )
 
     def _draw_nouls(self, left, y):
         """The two nouls that rode along in the same request, for the same price."""

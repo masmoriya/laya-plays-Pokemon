@@ -41,16 +41,28 @@ def pairs(run: list[dict]) -> list[tuple[float, int]]:
         if record.get("source") == "fake":
             continue
         probability = (record.get("nouls") or {}).get(NOUL)
-        following = run[i + 1]
-        if probability is None or following.get("battle_index") != record.get(
-            "battle_index"
-        ):
+        if probability is None:
             continue
-        hp = following.get("active_hp_fraction")
+        hp = _next_active_hp(run, i)
         if hp is None:
             continue
         out.append((probability, int(hp == 0)))
     return out
+
+
+def _next_active_hp(run: list[dict], i: int) -> float | None:
+    """The active slot's HP at the next decision of the same battle.
+
+    Scans forward rather than taking `i + 1`: an overworld or dialogue row logged inside
+    the same battle index would otherwise drop a turn that does have a label.
+    """
+    for following in run[i + 1 :]:
+        if following.get("battle_index") != run[i].get("battle_index"):
+            return None
+        hp = following.get("active_hp_fraction")
+        if hp is not None:
+            return hp
+    return None
 
 
 def brier(labelled) -> float:
@@ -89,9 +101,16 @@ def summarise(runs: list[list[dict]]) -> dict:
         seconds = sum(r["latency_ms"] for r in timed) / 1000
         counted = len(timed)
     else:
-        seconds = sum(run[-1]["t"] - run[0]["t"] for run in runs if len(run) > 1)
-        counted = len(decisions)
-    tokens = sum(r.get("input_tokens") or 0 for r in decisions)
+        clocked = [
+            run for run in runs if len(run) > 1 and run[0].get("t") and run[-1].get("t")
+        ]
+        seconds = sum(run[-1]["t"] - run[0]["t"] for run in clocked)
+        counted = sum(len(run) for run in clocked)
+    # cost and clock have to cover the same rows, or a replayed cassette's tokens get
+    # divided by a time only the live calls were measured over
+    tokens = sum(
+        r.get("input_tokens") or 0 for r in (timed if call_only else decisions)
+    )
     labelled = [pair for run in runs for pair in pairs(run)]
     positives = sum(y for _, y in labelled)
     base = positives / len(labelled) if labelled else 0.0
@@ -133,8 +152,14 @@ def _percentile(values, pct):
 
 def lines(s: dict, note: str) -> list[str]:
     n = f"n={s['decisions']} Jev calls over {s['runs']} run{'s' if s['runs'] > 1 else ''}"
+    if s["stand_in_rows"]:
+        # a stand-in never hit the network, so it is not a Jev call and the headline
+        # cannot quietly count it as one
+        n += f", {s['stand_in_rows']} of them stand-ins"
     if s["decisions_per_second"] is None:
-        first = f"decisions/sec and $/hour: not measured, no timed call in this run ({n})"
+        first = (
+            f"decisions/sec and $/hour: not measured, no timed call in this run ({n})"
+        )
     else:
         first = (
             f"{s['decisions_per_second']} decisions/sec, ${s['usd_per_hour']}/hour "

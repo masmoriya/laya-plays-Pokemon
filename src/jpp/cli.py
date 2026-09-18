@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import goals, options, policy, symbols as S
+from . import goals, options, policy
 from .decode import decode
 
 RUNS = Path("runs")

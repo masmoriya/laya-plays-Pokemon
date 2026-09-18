@@ -11,7 +11,10 @@ def test_type_multiplier_stacks_over_both_defender_types():
 
 
 def test_effectiveness_words_never_hand_over_a_number():
-    for types, word in ((("WATER",), "not very effective"), (("GRASS",), "super effective")):
+    for types, word in (
+        (("WATER",), "not very effective"),
+        (("GRASS",), "super effective"),
+    ):
         line = facts.describe_move("EMBER", 25, types)
         assert word in line
         assert "0.5" not in line and "2.0" not in line
@@ -35,4 +38,11 @@ def test_hp_words_bucket_the_fraction():
 
 def test_battle_summary_is_trimmed(battle_ram):
     summary = facts.battle_summary(decode(battle_ram).battle.active)
-    assert set(summary) == {"species", "level", "hp_fraction", "condition", "status", "types"}
+    assert set(summary) == {
+        "species",
+        "level",
+        "hp_fraction",
+        "condition",
+        "status",
+        "types",
+    }

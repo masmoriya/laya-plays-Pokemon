@@ -72,11 +72,16 @@ def main():
             "nouls": {
                 k: v["noul"] for k, v in answers.items() if v.get("type") == "noul"
             },
-            "latency_ms": round((time.monotonic() - started) * 1000, 1) if started else None,
+            "latency_ms": round((time.monotonic() - started) * 1000, 1)
+            if started
+            else None,
             "input_tokens": (payload.get("usage") or {}).get("input_tokens"),
             "model": payload.get("model"),
         }
-        print(f"{name:28} {choice['choice']:20} conf={choice.get('confidence')}", flush=True)
+        print(
+            f"{name:28} {choice['choice']:20} conf={choice.get('confidence')}",
+            flush=True,
+        )
     (HERE / "recorded_summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     print(f"\n{len(summary)} answers -> {RECORDED}")
 

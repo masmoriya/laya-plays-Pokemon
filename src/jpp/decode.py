@@ -50,6 +50,10 @@ class GameState:
     battle: Battle
     menu_item: int
     max_menu_item: int
+    battle_menu_item: int  # where the FIGHT/PKMN/ITEM/RUN cursor was left
+    move_list_index: int  # where the move cursor was left
+    party_menu_item: int  # where the party cursor was left
+    active_slot: int  # party index of the mon in battle, 0-based
     text_box_id: int
     joy_ignore: int
     walk_counter: int
@@ -160,6 +164,10 @@ def decode(mem) -> GameState:
         battle=Battle(kind=kind, active=active, opponent=opponent),
         menu_item=mem[S.CURRENT_MENU_ITEM],
         max_menu_item=mem[S.MAX_MENU_ITEM],
+        battle_menu_item=mem[S.BATTLE_SAVED_MENU_ITEM],
+        move_list_index=mem[S.PLAYER_MOVE_LIST_INDEX],
+        party_menu_item=mem[S.PARTY_SAVED_MENU_ITEM],
+        active_slot=mem[S.PLAYER_MON_NUMBER],
         text_box_id=mem[S.TEXT_BOX_ID],
         joy_ignore=mem[S.JOY_IGNORE],
         walk_counter=mem[S.WALK_COUNTER],

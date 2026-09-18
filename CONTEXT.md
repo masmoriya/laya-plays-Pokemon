@@ -413,7 +413,61 @@ result:
   un-completes itself as soon as the next goal walks into the lab.
 - `wBattleResult` is not in a `UNION`; `00c` section E guessed wrong. The latch stays.
 
-Still open, both needing a cartridge: the `input_ready()` predicate in `src/jpp/loop.py` is
-a two-byte best guess (`wJoyIgnore`, `wWalkCounter`) and the battle-menu button
-choreography in `src/jpp/options.py` is written from the menu layout. `jpp probe` settles
-both; the README says how.
+Still open, both needing a cartridge: the outdoor waypoint columns (Pallet Town and Route
+1, still a straight line up x=10) and whether `input_ready()` needs a byte beyond the two
+it reads. `jpp probe` settles both; the README says how.
+
+## Review round 4, 2026-09-18
+
+Five reviewers over `src/jpp/`, each walking pret/pokered or the installed PyBoy rather
+than trusting this file. Six findings were real and are fixed in the same commit. The
+decoder came back clean: all 30 addresses, both struct layouts, the event bit order, the
+BCD and big-endian reads, the species and move tables, and all 82 type-chart entries were
+re-derived independently and matched.
+
+1. **`wJoyIgnore` is a mask, not a flag, and `input_ready()` deadlocked on it.**
+   `_Joypad` (engine/joypad.asm) ANDs its complement into the held and pressed bytes, and
+   scripted dialogue sets `PAD_SELECT | PAD_START | PAD_CTRL_PAD`, which locks walking and
+   deliberately leaves A open. Waiting for the whole byte to clear hangs forever on Oak's
+   speech: the script is waiting for A, the agent is waiting for the script. `input_ready`
+   now takes the button it is about to press. This is on the critical path of every run,
+   and `jpp probe` itself would have stalled at the same text box.
+2. **Gen 1 menus remember their cursor, so the button sequences were right only on turn
+   1.** `DisplayBattleMenu` restores `wBattleAndStartSavedMenuItem`, and the move list
+   opens on `wPlayerMoveListIndex` (engine/battle/core.asm). `options.buttons_for` now
+   walks a delta from those bytes, which the decoder reads. Two related errors went with
+   it: the move row is the move's own slot, since the menu lists moves with no PP, and the
+   switch row is the party slot, since the menu lists fainted members.
+3. **The sidestep and the tie branch were unreachable.** `classify` only consulted
+   `sidesteps()` once the waypoint was already underfoot, where it returns nothing by
+   construction, so a blocked step was pressed forever and Jev never saw an overworld
+   branch. `Driver` now counts presses that moved nobody and calls a direction a wall
+   after two. A waypoint one tile away that will not be walked onto gets an A press, which
+   is how an object is talked to.
+4. **`get_starter` could never complete.** `PalletTownDefaultScript` fires only at
+   `wYCoord == 1`, and it is that script which sets `EVENT_OAK_APPEARED_IN_PALLET`;
+   without it `OaksLabDefaultScript` returns immediately and every poke ball answers
+   "those are POKE BALLs" forever. Walking to the lab door skipped it. A map's waypoint
+   can now be a function of the state, and Pallet Town heads north first. The lab's
+   waypoint is Charmander's ball once Oak has asked, Oak before that.
+5. **The collision grid was read inverted.** PyBoy builds it as
+   `np.isin(tiles, walkable_tiles_indexes)`, an inclusion test matching `CanWalkOntoTile`,
+   so 1 is walkable and `WALKABLE = 0` had every sidestep backwards. The test fixture took
+   its value from the constant it was checking, so it could not fail either way.
+6. **`measure` and the run log.** Cost was summed over all rows while the clock covered
+   only timed ones, which inflates $/hour the moment a replayed cassette lands in a run.
+   A row's HP was recorded after its own buttons were pressed, which is not the label the
+   next row is supposed to carry. The label scan now skips a row with no HP inside the
+   same battle instead of dropping the turn, and `tests/test_measure.py` covers the
+   arithmetic that the README quotes.
+
+Smaller, same commit: the no-progress cap resets on progress (a tile, a finished battle, a
+dent in the opponent) rather than counting every decision on a goal; `default_option`
+returns instead of raising when a turn has no legal action; `describe_switch` sends a
+condition word rather than raw HP, matching `battle_summary`; `dialogue_branch` truncates
+`visible_text` and says plainly that v0.1 never reaches it, since nothing decodes the
+tilemap and `classify` answers every non-battle text box with A.
+
+The six recorded cassettes are keyed on the state body, and the state body changed, so
+`fixtures/record.py` has to run again before `make_run.py` can rebuild a sample from real
+answers.

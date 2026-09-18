@@ -70,7 +70,9 @@ def describe_move(name: str, pp_left: int, defender_types) -> str:
 def describe_switch(mon) -> str:
     return (
         f"switch to {mon.species}, level {mon.level}, "
-        f"{hp_word(mon.hp_fraction)} at {mon.hp}/{mon.max_hp} HP; "
+        # a label, not {hp}/{max_hp}: raw counts are the arithmetic this file exists to
+        # keep out of the request, and `battle_summary` already sends only the fraction
+        f"{hp_word(mon.hp_fraction)}; "
         "the opponent gets a free turn"
     )
 

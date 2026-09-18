@@ -12,11 +12,12 @@ import os
 import pytest
 
 from jpp import symbols as S
-from jpp.decode import decode
 from jpp.loop import Driver
 
 ROM = os.environ.get("POKEMON_ROM")
-pytestmark = pytest.mark.skipif(not ROM, reason="set POKEMON_ROM to run the ROM smoke test")
+pytestmark = pytest.mark.skipif(
+    not ROM, reason="set POKEMON_ROM to run the ROM smoke test"
+)
 
 
 @pytest.fixture

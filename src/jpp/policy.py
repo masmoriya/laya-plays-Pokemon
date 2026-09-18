@@ -140,7 +140,11 @@ class JevClient:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             # backoff only on 429 and 5xx; a 400 or 422 is our bug and retrying hides it
-            if e.code in RETRY_STATUS and attempt < self.retries and time.monotonic() < deadline:
+            if (
+                e.code in RETRY_STATUS
+                and attempt < self.retries
+                and time.monotonic() < deadline
+            ):
                 wait = _retry_after(e.headers) or 0.5
                 if time.monotonic() + wait < deadline:
                     time.sleep(wait)
@@ -169,6 +173,10 @@ def default_option(branch) -> tuple[str, str]:
         if ranked:
             best = max(ranked, key=lambda k: _move_rank(options[k]))
             return best, "highest-effectiveness move"
+    if not options:
+        # a battle turn with no PP, no healthy bench and no Potion still has to return a
+        # button; `buttons_for` presses A, which is what a human does to see the menu again
+        return "no_legal_action", "no legal action to take"
     return sorted(options)[0], "first option in sorted order"
 
 

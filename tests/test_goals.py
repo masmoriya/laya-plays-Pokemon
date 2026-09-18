@@ -1,5 +1,3 @@
-from conftest import load_ram
-
 from jpp import symbols as S
 from jpp.decode import decode
 from jpp.goals import GOALS, GoalStack
@@ -34,7 +32,9 @@ def test_win_lab_rival_needs_both_the_event_and_a_winning_latch():
     assert unset.result is None
     stack = GoalStack()
     stack.advance(state, unset)
-    assert stack.current.name == "win_lab_rival"  # fails closed while the latch is unset
+    assert (
+        stack.current.name == "win_lab_rival"
+    )  # fails closed while the latch is unset
 
     lost = BattleLatch()
     lost.update(2, BattleLatch.LOSE)  # in a trainer battle

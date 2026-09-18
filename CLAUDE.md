@@ -7,11 +7,20 @@ Read `../CLAUDE.md` for the monorepo rules, then `CONTEXT.md` here in full.
 Verdict after three review rounds: **ready to build**. The run starts in Red's house 2F
 (`$26`); the input-readiness predicate is discovered with `jpp probe` in task 2, not assumed.
 
-## Build state (2026-09-18, first build session)
+## Build state (2026-09-18, after the review session)
 
-All nine CONTEXT.md tasks are coded. `uv run pytest -q` gives 58 passed, 5 skipped. The
-skips are the ROM smoke test (2) and the three jaggedness assertions that need recorded real
-answers. Nothing has been reviewed by a second pair of eyes yet; that is the next session.
+All nine CONTEXT.md tasks are coded and reviewed. `uv run pytest -q` gives 75 passed, 5
+skipped. The skips are the ROM smoke test (2) and the three jaggedness assertions that need
+recorded real answers.
+
+Five reviewers went over `src/jpp/` file by file against pret/pokered and the installed
+PyBoy. Six real findings, all fixed, all listed in CONTEXT.md "Review round 4": the
+readiness predicate deadlocked on scripted dialogue, the battle cursor is sticky so every
+button sequence after turn 1 was wrong, the sidestep and tie branch were unreachable,
+`get_starter` skipped the trigger that arms the whole starter sequence, the collision grid
+was read inverted, and `measure` divided all rows' cost by only the timed rows' clock. The
+decoder came out clean: 30 addresses, both struct layouts, event bit order, BCD, endianness,
+species and move tables and all 82 type-chart entries re-derived and matched.
 
 What ran for real and what did not:
 - Tasks 1, 3, 4, 5, 6, 8, 9: checks pass on synthetic RAM and the fake Jev.
@@ -42,9 +51,15 @@ independently published addresses matched byte-exact (`wCurMap $D35E`, `wPartyCo
 `wEventFlags $D747`, `wIsInBattle $D057`, party HP/level at `$D16C`/`$D18C`), which is the
 evidence for the battle block (`wBattleMon $D014`, `wEnemyMon $CFE5`).
 
-Three `ponytail:` markers, all settled only by `jpp probe` on a cartridge: battle-menu
-cursor choreography (`options.py:109`), outdoor waypoints (`route.py:8`), the player's
-cell in the collision grid (`route.py:44`).
+`ponytail:` markers left, both needing a cartridge: the outdoor waypoint columns
+(`route.py`, Pallet Town and Route 1 are still a straight line up x=10) and the bag row for
+a second item (`options.py`). The battle-menu choreography and the player's cell in the
+collision grid are no longer guesses; both were settled from pret/pokered and the installed
+PyBoy in review round 4.
+
+The cassettes in `fixtures/recorded/` are keyed on the state body and the state body
+changed in round 4, so they have to be recorded again before `make_run.py` can build a
+sample out of real answers.
 
 Blocked on the user: a Pokemon Red ROM path (`--rom`), and Vercel AI Gateway paid credits
 for the remaining recordings (see `../CLAUDE.md`, "Real Jev access").

@@ -187,7 +187,9 @@ def main():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("".join(json.dumps(r) + "\n" for r in rows))
     timed = sum(1 for r in rows if r["latency_ms"])
-    print(f"\n{len(rows)} decisions -> {OUT}  ({real} real answers, {fake} stand-in, {timed} timed)")
+    print(
+        f"\n{len(rows)} decisions -> {OUT}  ({real} real answers, {fake} stand-in, {timed} timed)"
+    )
 
 
 if __name__ == "__main__":

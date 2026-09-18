@@ -36,20 +36,37 @@ def test_a_legal_choice_becomes_the_button_sequence(fake, branch):
     assert decision.nouls == {"faints_this_turn": 0.23, "should_flee": 0.08}
     assert decision.latency_ms > 0
     state = decode(bytes(make_ram.battle()))
-    assert options.buttons_for(state, branch, decision.option) == ["a", "down", "down", "a"]
+    assert options.buttons_for(state, branch, decision.option) == [
+        "a",
+        "down",
+        "down",
+        "a",
+    ]
 
 
 def test_an_illegal_option_id_takes_the_code_default(fake, branch):
-    answers = {"next_action": {"type": "choice", "choice": "use_move_hyper_beam",
-                               "confidence": 0.99, "probabilities": {"use_move_hyper_beam": 0.99}}}
+    answers = {
+        "next_action": {
+            "type": "choice",
+            "choice": "use_move_hyper_beam",
+            "confidence": 0.99,
+            "probabilities": {"use_move_hyper_beam": 0.99},
+        }
+    }
     decision = fake(answers).decide(branch)
     assert decision.fell_back and "unusable option" in decision.reason
     assert decision.option == "use_move_scratch"  # the only neutral move against WATER
 
 
 def test_other_is_not_a_pressable_option(fake, branch):
-    answers = {"next_action": {"type": "choice", "choice": "other", "confidence": 0.4,
-                               "probabilities": {"other": 0.4}}}
+    answers = {
+        "next_action": {
+            "type": "choice",
+            "choice": "other",
+            "confidence": 0.4,
+            "probabilities": {"other": 0.4},
+        }
+    }
     decision = fake(answers).decide(branch)
     assert decision.fell_back and decision.option == "use_move_scratch"
 

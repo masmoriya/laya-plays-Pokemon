@@ -16,19 +16,26 @@ from .policy import Decision, Policy
 
 FRAMES_PER_TICK = 8  # one decode per 8 frames, ~7.5 decodes a second at 60 fps
 PRESS_FRAMES = 4
-NO_PROGRESS_CAP = 40  # decisions per goal before code takes over, CONTEXT section 3
+NO_PROGRESS_CAP = 40  # decisions per goal with no progress, CONTEXT section 3
+BLOCKED_AFTER = 2  # presses of one direction from one tile before calling it a wall
 
 
-def input_ready(state) -> bool:
-    """Whether the game will honour a button this tick.
+def input_ready(state, button: str) -> bool:
+    """Whether the game will honour *this* button this tick.
 
-    Best guess from two `wram.asm` labels: `wJoyIgnore` ("Set buttons are ignored") and
-    `wWalkCounter` ("walk animation counter"), which is nonzero mid-step. This predicate
-    is the one thing in the project that cannot be settled without a ROM: run
-    `jpp probe --rom <path>`, press buttons by hand, and keep the combination that flips
-    exactly when input starts being honoured.
+    Per button, because `wJoyIgnore` is a mask and not a flag: `_Joypad`
+    (engine/joypad.asm) ANDs its complement into the held and pressed bytes, and scripted
+    dialogue sets `PAD_SELECT | PAD_START | PAD_CTRL_PAD` precisely so that A still
+    advances the text while walking is locked out. Waiting for the whole byte to clear
+    deadlocks: the script is waiting for the A press, and the agent is waiting for the
+    script. `wWalkCounter` is nonzero mid-step, which only blocks another step.
+
+    Still to settle on a cartridge with `jpp probe --rom <path>`: whether any other byte
+    has to be in the predicate. The mask semantics are not a guess.
     """
-    return state.joy_ignore == 0 and state.walk_counter == 0
+    if state.joy_ignore & S.BUTTON_BITS.get(button, 0):
+        return False
+    return button in ("a", "b") or state.walk_counter == 0
 
 
 class BattleLatch:
@@ -63,6 +70,10 @@ class Driver:
         self.latch = BattleLatch()
         self.state = None
         self.turn = 0  # turns inside the current battle, reset when one ends
+        # directions that have been pressed from this tile and moved nobody. Axis-first
+        # stepping walks into a wall forever without this: the collision grid is the
+        # screen's opinion, and an NPC or a ledge is not in it.
+        self.stuck: dict[str, int] = {}
 
     def tick(self, frames: int = FRAMES_PER_TICK):
         self.emu.tick(frames)
@@ -76,8 +87,22 @@ class Driver:
         return self.state
 
     def press(self, button: str):
+        before = self._where()
         self.emu.button(button, PRESS_FRAMES)
-        return self.tick()
+        state = self.tick()
+        if self._where() != before:
+            self.stuck.clear()
+        elif button in route.DIRECTIONS:
+            self.stuck[button] = self.stuck.get(button, 0) + 1
+        return state
+
+    def _where(self):
+        st = self.state
+        return (st.map_id, st.x, st.y) if st else None
+
+    def blocked(self, direction: str) -> bool:
+        """One ignored press can be a timing miss; two from the same tile is a wall."""
+        return self.stuck.get(direction, 0) >= BLOCKED_AFTER
 
     def collision(self):
         return self.emu.game_area_collision()
@@ -100,7 +125,9 @@ def probe(emulator, ticks: int, out=print, every: int = 8):
             f"party={len(st.party)} | joy_ignore=${st.joy_ignore:02X} "
             f"walk_counter={st.walk_counter} text_box_id=${st.text_box_id:02X} "
             f"font_loaded={st.font_loaded} tile_in_front=${st.tile_in_front:02X} "
-            f"menu={st.menu_item}/{st.max_menu_item} ready={input_ready(st)}"
+            f"menu={st.menu_item}/{st.max_menu_item} "
+            f"battle_menu={st.battle_menu_item} move_index={st.move_list_index} "
+            f"ready_a={input_ready(st, 'a')} ready_up={input_ready(st, 'up')}"
         )
     return driver
 
@@ -111,26 +138,38 @@ def classify(driver: Driver, goal, waypoint) -> tuple[str, object]:
     Returns (action, payload): ("wait", None), ("press", button), or ("branch", Branch).
     """
     st = driver.state
-    if not input_ready(st):
-        return "wait", None
     if st.in_battle:
         if st.max_menu_item > 0 or st.menu_item > 0:
+            if st.joy_ignore & (S.PAD_A | S.PAD_CTRL_PAD):
+                return "wait", None  # the menu is up but the script still owns the pad
             branch = options.battle_branch(
                 st, goal, items=options.bag(driver.emu.memory), turn=driver.turn
             )
             return "branch", branch
-        return "press", "a"
+        return _press(st, "a")
     if st.text_box_id:
-        return "press", "a"  # a text box with no cursor: A costs nothing
+        return _press(st, "a")  # a text box with no cursor: A costs nothing
     step = route.next_step(st, waypoint)
-    if step:
-        return "press", step
-    free = route.sidesteps(st, driver.collision(), waypoint)
+    if step and not driver.blocked(step):
+        return _press(st, step)
+    if step and route.distance(st, waypoint) == 1:
+        # the waypoint is the next tile and it will not be walked onto: it is an object,
+        # Oak or a poke ball. Walking into it already turned the player to face it.
+        return _press(st, "a")
+    free = [
+        d
+        for d in route.sidesteps(st, driver.collision(), waypoint)
+        if not driver.blocked(d)
+    ]
     if len(free) == 1:
-        return "press", free[0]
+        return _press(st, free[0])
     if len(free) > 1:
         return "branch", options.tie_branch(st, goal, waypoint, free)
-    return "press", "a"
+    return _press(st, "a")
+
+
+def _press(state, button: str) -> tuple[str, object]:
+    return ("press", button) if input_ready(state, button) else ("wait", None)
 
 
 def play(
@@ -146,7 +185,7 @@ def play(
     stack = goals.GoalStack()
     records: list[dict] = []
     log = log_path.open("a") if log_path else None
-    stale, on_goal = 0, None
+    stale, on_goal, where = 0, None, None
     try:
         for _ in range(max_ticks):
             if len(records) >= max_decisions or stack.done:
@@ -156,8 +195,10 @@ def play(
             goal = stack.current
             if goal is None:
                 break
-            if goal is not on_goal:
-                on_goal, stale = goal, 0
+            here = _progress(driver)
+            if goal is not on_goal or here != where:
+                stale = 0
+            on_goal, where = goal, here
             waypoint = route.waypoint_for(goal, driver.state)
             action, payload = classify(driver, goal, waypoint)
             if action == "wait":
@@ -167,10 +208,14 @@ def play(
                 continue
             forced = stale >= NO_PROGRESS_CAP
             decision = policy.decide(payload, forced=forced)
-            driver.turn += payload.kind == "battle"
+            if payload.kind == "battle":
+                driver.turn += 1
+            # the row's HP is the HP the decision was taken on, not what the buttons then
+            # did to it: `measure` labels turn n from the HP row n+1 carries
+            asked_on = driver.state
             for button in options.buttons_for(driver.state, payload, decision.option):
                 driver.press(button)
-            record = _record(goal, payload, decision, driver)
+            record = _record(goal, payload, decision, driver, asked_on)
             records.append(record)
             if log:
                 log.write(json.dumps(record) + "\n")
@@ -184,8 +229,18 @@ def play(
     return records
 
 
-def _record(goal, branch: Branch, decision: Decision, driver: Driver) -> dict:
+def _progress(driver: Driver) -> tuple:
+    """What "getting somewhere" means, for the no-progress cap.
+
+    A tile, a finished battle, or a dent in the opponent. A long battle that is being won
+    is not stuck, and the cap should not fire on it.
+    """
     st = driver.state
+    foe = st.battle.opponent
+    return (st.map_id, st.x, st.y, driver.latch.count, foe.hp if foe else None)
+
+
+def _record(goal, branch: Branch, decision: Decision, driver: Driver, st) -> dict:
     return {
         "t": time.time(),
         "goal": goal.name,

@@ -72,8 +72,38 @@ CURRENT_MENU_ITEM = 0xCC26  # wCurrentMenuItem
 MAX_MENU_ITEM = 0xCC28  # wMaxMenuItem
 TOP_MENU_ITEM_Y = 0xCC24  # wTopMenuItemY
 TOP_MENU_ITEM_X = 0xCC25  # wTopMenuItemX
+
+# Gen 1 menus remember where the cursor was. All three are zeroed by
+# InitBattleVariables, so turn 1 starts at FIGHT / move 1 / party slot 1 and every later
+# turn does not. options.buttons_for navigates from these, not from an assumed corner.
+PARTY_SAVED_MENU_ITEM = 0xCC2B  # wPartyAndBillsPCSavedMenuItem
+BATTLE_SAVED_MENU_ITEM = 0xCC2D  # wBattleAndStartSavedMenuItem
+PLAYER_MOVE_LIST_INDEX = 0xCC2E  # wPlayerMoveListIndex, the last move picked
+PLAYER_MON_NUMBER = 0xCC2F  # wPlayerMonNumber, party index of the active mon
 TEXT_BOX_ID = 0xD125  # wTextBoxID
 JOY_IGNORE = 0xCD6B  # wJoyIgnore, "Set buttons are ignored"
+
+# wJoyIgnore is a per-button mask, not a boolean: `_Joypad` in engine/joypad.asm ANDs its
+# complement against the held and pressed bytes. Scripted dialogue sets
+# PAD_SELECT | PAD_START | PAD_CTRL_PAD, which locks movement and deliberately leaves A
+# open so the text can be advanced. Bit order from constants/hardware.inc.
+PAD_A = 0x01
+PAD_B = 0x02
+PAD_SELECT = 0x04
+PAD_START = 0x08
+PAD_RIGHT = 0x10
+PAD_LEFT = 0x20
+PAD_UP = 0x40
+PAD_DOWN = 0x80
+PAD_CTRL_PAD = 0xF0
+BUTTON_BITS = {
+    "a": PAD_A,
+    "b": PAD_B,
+    "up": PAD_UP,
+    "down": PAD_DOWN,
+    "left": PAD_LEFT,
+    "right": PAD_RIGHT,
+}
 WALK_COUNTER = 0xCFC5  # wWalkCounter, "walk animation counter"
 FONT_LOADED = 0xCFC4  # wFontLoaded, bit 0 set while a text box owns the walk tiles
 TILE_IN_FRONT = 0xCFC6  # wTileInFrontOfPlayer

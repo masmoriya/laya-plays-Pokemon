@@ -15,20 +15,49 @@ from . import symbols as S
 
 DIRECTIONS = ("up", "down", "left", "right")
 
-# One target tile per map, per goal. (x, y) in map tile coordinates, the same units as
-# wXCoord / wYCoord.
-WAYPOINTS: dict[str, dict[int, tuple[int, int]]] = {
+# One target tile per map, per goal, or a function of the state where the game gates the
+# leg on an event. (x, y) in map tile coordinates, the same units as wXCoord / wYCoord.
+OAK_TRIGGER = (10, 1)  # any tile with wYCoord == 1: that is the whole condition
+LAB_DOOR = (12, 11)
+CHARMANDER_BALL = (6, 3)
+
+
+def _pallet_town(state) -> tuple[int, int]:
+    """North edge first, then the lab door.
+
+    Walking straight to the lab is a dead end. `PalletTownDefaultScript`
+    (scripts/PalletTown.asm) only fires when `wYCoord == 1` and
+    EVENT_FOLLOWED_OAK_INTO_LAB is clear, and it is that script that sets
+    EVENT_OAK_APPEARED_IN_PALLET. Without it `OaksLabDefaultScript` returns immediately,
+    Oak never asks, and every poke ball answers "those are POKE BALLs" forever.
+    """
+    if not state.event(S.EVENT_FOLLOWED_OAK_INTO_LAB):
+        return OAK_TRIGGER
+    return LAB_DOOR
+
+
+def _oaks_lab(state) -> tuple[int, int]:
+    """Oak until he asks, then Charmander's ball.
+
+    OaksLab.asm: object_event 6, 3 is the Charmander ball, object_event 5, 2 is Oak.
+    Both are objects, so the tile stays blocked; walking into one turns the player to
+    face it and `classify` presses A from there.
+    """
+    if state.event(S.EVENT_OAK_ASKED_TO_CHOOSE_MON):
+        return CHARMANDER_BALL
+    return (5, 3)
+
+
+WAYPOINTS: dict[str, dict[int, object]] = {
     # RedsHouse2F.asm: warp_event 7, 1, REDS_HOUSE_1F, 3
     # RedsHouse1F.asm: warp_event 2, 7, LAST_MAP, 1
     "leave_house": {
         S.REDS_HOUSE_2F: (7, 1),
         S.REDS_HOUSE_1F: (2, 7),
     },
-    # PalletTown.asm: warp_event 12, 11, OAKS_LAB, 2
-    # OaksLab.asm: object_event 5, 2, SPRITE_OAK -> stand one tile below him
     "get_starter": {
-        S.PALLET_TOWN: (12, 11),
-        S.OAKS_LAB: (5, 3),
+        S.PALLET_TOWN: _pallet_town,
+        S.OAKS_LAB: _oaks_lab,
     },
     # the rival battle happens where we stand; no walking
     "win_lab_rival": {},
@@ -40,19 +69,23 @@ WAYPOINTS: dict[str, dict[int, tuple[int, int]]] = {
 }
 
 # Where the player stands in the 20x18 tile grid `game_area_collision()` returns, and how
-# many grid tiles one walking step covers.
-# ponytail: measured from the screen geometry, not from a running ROM. `jpp probe` prints
-# the grid; if the player is not at this cell the sidestep reads the wrong neighbours.
+# many grid tiles one walking step covers. PyBoy builds that grid by testing each 2x2
+# block against the tileset's walkable list and then doubling it
+# (`game_wrapper_pokemon_gen1._get_screen_walkable_matrix`), so a block is two grid cells
+# wide, the screen is 10x9 blocks, and the player is the middle one. 1 is walkable: the
+# matrix is `np.isin(tiles, walkable_tiles_indexes)`, an inclusion test, matching
+# `CanWalkOntoTile` in engine/overworld/movement.asm.
 PLAYER_COL, PLAYER_ROW = 8, 9
 STEP_TILES = 2
-WALKABLE = 0
+WALKABLE = 1
 
 _DELTA = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
 
 def waypoint_for(goal, state) -> tuple[int, int] | None:
     """The tile to head for on the current map, or None if this map has no waypoint."""
-    return WAYPOINTS.get(goal.name, {}).get(state.map_id)
+    leg = WAYPOINTS.get(goal.name, {}).get(state.map_id)
+    return leg(state) if callable(leg) else leg
 
 
 def next_step(state, waypoint) -> str | None:
