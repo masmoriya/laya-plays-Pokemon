@@ -1,5 +1,6 @@
 """The overlay renders headlessly, so the layout is checked without a display."""
 
+import json
 import os
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -60,3 +61,18 @@ def test_json_tinting_separates_keys_strings_and_numbers():
     assert overlay.tint('  "species":') == overlay.KEY
     assert overlay.tint('  "CHARMANDER",') == overlay.STRING
     assert overlay.tint("  0.42,") == overlay.NUMBER
+
+
+def test_the_ticker_rate_comes_from_call_latency_not_the_replay_clock():
+    assert overlay.measured_rate([]) is None
+    assert overlay.measured_rate([0.0, 0.0]) is None  # untimed rows are not a zero rate
+    assert abs(overlay.measured_rate([1000.0, 1000.0]) - 1.0) < 1e-9
+    assert abs(overlay.measured_rate([836.0]) - 1.196) < 0.001
+
+
+def test_render_frames_writes_one_png_per_frame(tmp_path):
+    run = tmp_path / "run.jsonl"
+    run.write_text(json.dumps(RECORD) + "\n")
+    out = tmp_path / "frames"
+    assert overlay.render_frames(run, out, fps=10, rate=2.0, seconds=1) == 10
+    assert sorted(p.name for p in out.glob("*.png"))[:2] == ["f00000.png", "f00001.png"]

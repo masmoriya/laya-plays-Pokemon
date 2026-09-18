@@ -120,9 +120,21 @@ def _overlay_feed(emu):
 
 
 def cmd_overlay(args):
-    from .overlay import run_replay
+    from .overlay import render_frames, run_replay
 
-    run_replay(args.replay, rate=args.rate)
+    rate = 1.5 if args.demo and args.rate == 2.0 else args.rate
+    if args.frames:
+        n = render_frames(
+            args.replay,
+            Path(args.frames),
+            fps=args.fps,
+            rate=rate,
+            seconds=args.seconds,
+            skip=args.skip,
+        )
+        print(f"{n} frames -> {args.frames}")
+        return
+    run_replay(args.replay, rate=rate)
 
 
 def main(argv=None):
@@ -161,10 +173,17 @@ def main(argv=None):
     p.set_defaults(func=cmd_play)
 
     p = sub.add_parser(
-        "overlay", help="the 1280x720 window, live or replaying a run file"
+        "overlay", help="the 1080x1350 window, live or replaying a run file"
     )
     p.add_argument("--replay", required=True, type=_file)
     p.add_argument("--rate", type=float, default=2.0, help="decisions per second")
+    p.add_argument(
+        "--demo", action="store_true", help="1.5 decisions/sec, watchable on camera"
+    )
+    p.add_argument("--frames", help="dump one PNG per frame here instead of a window")
+    p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--seconds", type=float, default=None)
+    p.add_argument("--skip", type=int, default=0, help="start at this decision")
     p.set_defaults(func=cmd_overlay)
 
     args = parser.parse_args(argv)
