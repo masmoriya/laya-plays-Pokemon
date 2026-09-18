@@ -71,8 +71,8 @@ complete, so the predicate fails closed. `wIsInBattle` is `0` none, `1` wild, `2
 flip and does not depend on it. Oak blocks Route 1 until the starter is in hand, so the goals
 are ordered, not parallel; waypoints are in section 3.
 
-**Non-goals**: badges, items beyond the rival battle, catching, the PC, Route 22, HM moves,
-save scumming, Twitch.
+**Non-goals**: badges, items beyond the rival battle, catching, the PC, Route 22, HMs, save
+scumming, Twitch.
 
 **v0.2 candidates**: Twitch in the "Twitch Plays" category (`04` section 4), Brock,
 overlapping the Jev call with the attack animation, `--resume` from a save state, the wipeout
@@ -209,7 +209,7 @@ Refinements on `02` section 5 that matter:
 Three layers, per `SHARED.md`. **Fake Jev** is the 15-line server from `01` section 3,
 `fixtures/fake_jev.py`, behind `JEV_BASE_URL`; CI runs against it, no key, no network.
 **Record and replay** waits on a key: the `01` section 4 proxy keyed by
-`sha256(state + questions)` records into `fixtures/`, then tests replay free.
+`sha256(state + questions)` fills `fixtures/`, then tests replay free.
 
 **Fixtures.** `fixtures/ram_*.bin` are **synthetic** WRAM images from `fixtures/make_ram.py`,
 which pokes known values at the documented addresses into a zero-filled buffer. A dump from a
@@ -263,7 +263,12 @@ Layout: `src/jpp/{symbols,decode,facts,goals,route,options,policy,loop,overlay,m
    `uv run pytest tests/test_decode.py -q`.
 2. **PyBoy driver, input-readiness predicate, battle-result latch.** `loop.py` skeleton plus
    `uv run jpp probe --rom <path>`, printing the decoded state once a second. Knowing when the
-   game accepts a button is the fiddly bit; the latch needs the tick loop, so it lands here.
+   game accepts a button is the fiddly bit and is not assumed: `probe` also prints the
+   candidate readiness bytes each tick (`wJoyIgnore`, `wTextBoxID`, the sprite-movement
+   flags around `wWalkCounter`, and the overworld/menu joypad state around `wJoyInput`), the
+   builder presses buttons by hand and picks the combination that flips exactly when input
+   starts being honored, then writes it down as `input_ready()` with the addresses cited.
+   The latch needs the tick loop, so it lands here.
    Check: run `probe`, walk out by hand and watch `map` go `$26` to `$25` to `$00`, lose a
    wild battle on purpose and watch `last_battle_result` latch once and hold; plus
    `uv run pytest tests/test_smoke_rom.py -q`.
@@ -358,7 +363,7 @@ the bars mid rival battle; the raw `measure` output as text.
 
 ## Review round 2: responses
 
-Round 1: all six findings applied, none refused.
+Round 1: all six applied, none refused.
 
 1. **Starting map, BLOCKER.** Correct, fixed. `RedsHouse2F.asm` has one warp,
    `warp_event 7, 1, REDS_HOUSE_1F, 3`. Goal table, waypoints, and task 2 now run `$26` to
@@ -371,4 +376,8 @@ Round 1: all six findings applied, none refused.
 3. **Sample size.** Conceded, "hundreds" was wrong for a two-battle run. Kept
    `faints_this_turn`: 10 to 30 labels a run beats wipeout's 2 by an order of magnitude and
    runs are cheap to repeat. Section 5 states the real n and calls v0.1 preliminary.
-4. **Decisions per second.** Pinned in section 5, named in the measure line.
+4. **Decisions per second.** Pinned in section 5, named in the output.
+
+## Review round 3: responses
+
+- Input readiness: task 2 now names the candidate WRAM bytes `probe` prints and makes discovering the predicate an explicit step with a written outcome, not an assumption.
