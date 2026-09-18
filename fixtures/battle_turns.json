@@ -1,0 +1,190 @@
+{
+ "battle_turn_1": {
+  "goal": "Win the rival battle in Oak's lab without the party fainting.",
+  "battle": {
+   "kind": "trainer",
+   "active": {
+    "species": "CHARMANDER",
+    "level": 5,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "FIRE"
+    ]
+   },
+   "opponent": {
+    "species": "SQUIRTLE",
+    "level": 5,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "WATER"
+    ]
+   },
+   "turn": 1
+  },
+  "party": [
+   {
+    "species": "PIDGEY",
+    "level": 4,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "NORMAL",
+     "FLYING"
+    ],
+    "slot": 2
+   }
+  ],
+  "options": {
+   "use_move_scratch": "attack with SCRATCH, a Normal move, 33 of 35 PP left, neutral against WATER",
+   "use_move_growl": "use GROWL, a Normal move, 40 of 40 PP left, neutral against WATER",
+   "use_move_ember": "attack with EMBER, a Fire move, 25 of 25 PP left, not very effective against WATER",
+   "switch_to_pidgey": "switch to PIDGEY, level 4, healthy at 17/17 HP; the opponent gets a free turn"
+  }
+ },
+ "battle_turn_2": {
+  "goal": "Win the rival battle in Oak's lab without the party fainting.",
+  "battle": {
+   "kind": "trainer",
+   "active": {
+    "species": "CHARMANDER",
+    "level": 5,
+    "hp_fraction": 0.79,
+    "condition": "scratched",
+    "status": "none",
+    "types": [
+     "FIRE"
+    ]
+   },
+   "opponent": {
+    "species": "SQUIRTLE",
+    "level": 5,
+    "hp_fraction": 0.67,
+    "condition": "scratched",
+    "status": "none",
+    "types": [
+     "WATER"
+    ]
+   },
+   "turn": 2
+  },
+  "party": [
+   {
+    "species": "PIDGEY",
+    "level": 4,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "NORMAL",
+     "FLYING"
+    ],
+    "slot": 2
+   }
+  ],
+  "options": {
+   "use_move_scratch": "attack with SCRATCH, a Normal move, 33 of 35 PP left, neutral against WATER",
+   "use_move_growl": "use GROWL, a Normal move, 40 of 40 PP left, neutral against WATER",
+   "use_move_ember": "attack with EMBER, a Fire move, 25 of 25 PP left, not very effective against WATER",
+   "switch_to_pidgey": "switch to PIDGEY, level 4, healthy at 17/17 HP; the opponent gets a free turn"
+  }
+ },
+ "battle_turn_3": {
+  "goal": "Win the rival battle in Oak's lab without the party fainting.",
+  "battle": {
+   "kind": "trainer",
+   "active": {
+    "species": "CHARMANDER",
+    "level": 5,
+    "hp_fraction": 0.42,
+    "condition": "hurt",
+    "status": "none",
+    "types": [
+     "FIRE"
+    ]
+   },
+   "opponent": {
+    "species": "SQUIRTLE",
+    "level": 5,
+    "hp_fraction": 0.81,
+    "condition": "scratched",
+    "status": "none",
+    "types": [
+     "WATER"
+    ]
+   },
+   "turn": 3
+  },
+  "party": [
+   {
+    "species": "PIDGEY",
+    "level": 4,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "NORMAL",
+     "FLYING"
+    ],
+    "slot": 2
+   }
+  ],
+  "options": {
+   "use_move_scratch": "attack with SCRATCH, a Normal move, 33 of 35 PP left, neutral against WATER",
+   "use_move_growl": "use GROWL, a Normal move, 40 of 40 PP left, neutral against WATER",
+   "use_move_ember": "attack with EMBER, a Fire move, 25 of 25 PP left, not very effective against WATER",
+   "switch_to_pidgey": "switch to PIDGEY, level 4, healthy at 17/17 HP; the opponent gets a free turn"
+  }
+ },
+ "battle_turn_4": {
+  "goal": "Win the rival battle in Oak's lab without the party fainting.",
+  "battle": {
+   "kind": "trainer",
+   "active": {
+    "species": "CHARMANDER",
+    "level": 5,
+    "hp_fraction": 0.21,
+    "condition": "hurt",
+    "status": "none",
+    "types": [
+     "FIRE"
+    ]
+   },
+   "opponent": {
+    "species": "SQUIRTLE",
+    "level": 5,
+    "hp_fraction": 0.29,
+    "condition": "hurt",
+    "status": "none",
+    "types": [
+     "WATER"
+    ]
+   },
+   "turn": 4
+  },
+  "party": [
+   {
+    "species": "PIDGEY",
+    "level": 4,
+    "hp_fraction": 1.0,
+    "condition": "healthy",
+    "status": "none",
+    "types": [
+     "NORMAL",
+     "FLYING"
+    ],
+    "slot": 2
+   }
+  ],
+  "options": {
+   "use_move_scratch": "attack with SCRATCH, a Normal move, 33 of 35 PP left, neutral against WATER",
+   "use_move_growl": "use GROWL, a Normal move, 40 of 40 PP left, neutral against WATER",
+   "use_move_ember": "attack with EMBER, a Fire move, 25 of 25 PP left, not very effective against WATER",
+   "switch_to_pidgey": "switch to PIDGEY, level 4, healthy at 17/17 HP; the opponent gets a free turn"
+  }
+ }
+}

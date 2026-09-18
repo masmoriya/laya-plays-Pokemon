@@ -28,22 +28,38 @@ captured by OBS.
 
 **Differentiator.** `00a` is blunt: game demos appear 16 times in the top-205 at a median of
 1 star, and only the one with a technical contribution broke out. Genre is not the pitch.
-Two things separate this from the niche's repos; speed is a third, for another audience.
 
-1. **A reusable RAM-to-state harness.** Both incumbents stop at "it moves", and
-   `PokemonRedExperiments` ships flat hex copied off a wiki
-   (`baselines/memory_addresses.py`). We ship symbolic names from pret/pokered `ram/wram.asm`
-   and `constants/event_constants.asm`, a decoder tested against a committed RAM fixture, and
-   a `GameState` dataclass anyone can import. That is the part strangers reuse.
-2. **A calibration measurement.** Every battle turn carries a noul, scored against what the
-   RAM says happened. Neither the RL camp nor the LLM-agent camp publishes this (`03` section
-   5), and neither incumbent publishes a number of any kind.
-3. **Speed, framed honestly.** Sub-second decisions beat nothing in this niche: both
-   incumbents call the same API at the same 100 ms, so the latency is the platform's. Speed
-   is the hook against the famous version of the idea, Claude Plays Pokemon.
+The head-to-head incumbent is real work, not a stub. Re-read 2026-09-18:
+`milanboers/jev-plays-pokemon` is MIT, 4,086 lines, vendors NousResearch/pokemon-agent's RAM
+reader (MIT, 175 stars) under `jev_plays_pokemon/vendor/`, decodes screen text from the
+tilemaps, reads NPC object memory at `wSpriteStateData1`/`2` (`$C100`/`$C200`), A* pathfinds
+over a live collision grid, and plays the opening end to end: out of the house, to Oak, a
+starter, back into Pallet Town. It asks one noul per candidate button every turn plus a goal
+choice. "It moves" was wrong about it, and the earlier draft of this section said so.
 
-Claimable per incumbent: `milanboers/jev-plays-pokemon` (0 stars, no license, Red on an
-emulator) is the only real head to head, run here on the same ROM (task 9);
+So three claims, and the decoder is not one of them:
+
+1. **A different question economy.** The incumbent asks Jev on every turn: eight action
+   nouls plus a goal choice, whatever the tick is. We ask only at branches, and code owns
+   the routine ticks (text boxes, waypoint steps, cursor moves). Decisions per second and
+   $/hour are therefore measuring different questions, and ours is the cheaper shape. The
+   comparison table has to name the unit or it is meaningless.
+2. **A published calibration number.** Every battle turn carries `faints_this_turn`, scored
+   against what the RAM says happened next, printed with n, the base rate, the constant
+   predictor and an interval. Neither the RL camp nor the LLM-agent camp publishes this
+   (`03` section 5), and neither incumbent publishes a number of any kind.
+3. **The overlay.** A 1280x720 window with every option's probability as a bar, the state
+   that was actually sent, and a running Brier. The incumbent ships a plain SDL window.
+
+Footnote, not a headline: our RAM addresses come from walking pret/pokered `ram/wram.asm`
+rather than copying hex off a wiki, and `GameState` is importable. NousResearch already ships
+a reader, so this is a sourcing preference, not a gap we fill.
+
+**Name.** The incumbent already owns `jev-plays-pokemon` on GitHub. Pick a different repo
+name at launch; the directory here keeps the working name.
+
+Claimable per incumbent: `milanboers/jev-plays-pokemon` is the only real head to head and
+needs a ROM to run, which we do not have (see `docs/comparison.md`);
 `anxkhn/JevPlaysPokemon` (1 star, Gen 3 Showdown) has no overworld, so only battle
 decisions/sec compares; Claude Plays Pokemon publishes no timing, so seconds per action stays
 a stream observation.
@@ -57,13 +73,15 @@ Goal stack, in game order (the first rival battle is in Oak's lab, before Viridi
 
 | Goal | Completion predicate (RAM) |
 |---|---|
-| `leave_house` | `wCurMap == $00` (PALLET_TOWN). The run starts upstairs in `$26` REDS_HOUSE_2F, two warps away |
+| `leave_house` | `wCurMap` is neither `$26` REDS_HOUSE_2F nor `$25` REDS_HOUSE_1F. The run starts upstairs in `$26`, two warps away. Built as `== $00` first; that un-completes itself the moment the next goal walks into the lab, and the stack has no memory |
 | `get_starter` | `wPartyCount >= 1`, cross-checked with `EVENT_GOT_STARTER` |
 | `win_lab_rival` | `EVENT_BATTLED_RIVAL_IN_OAKS_LAB` set and the latched battle result is `0` (win) |
 | `reach_viridian` | `wCurMap == $01` (VIRIDIAN_CITY) |
 
-`wBattleResult` sits in a WRAM union (`00c` section E), so it only means anything while the
-battle engine owns the slot and is never read on a goal-check tick. `loop.py` latches it on
+`wBattleResult` ($CF0B) is not in fact inside a `UNION` in `ram/wram.asm`, which `00c`
+section E guessed it was; it is a plain `db` between `wBoughtOrSoldItemInMart` and
+`wAutoTextBoxDrawingControl`. It still only means anything just after a battle ends, so the
+latch stays and it is never read on a goal-check tick. `loop.py` latches it on
 the tick `wIsInBattle` goes nonzero to `0`, as `last_battle_result`; win or loss comes from
 that latch, which `wram.asm` documents as `$00` win, `$01` lose, `$02` draw. Unset means not
 complete, so the predicate fails closed. `wIsInBattle` is `0` none, `1` wild, `2` trainer,
@@ -355,11 +373,12 @@ the bars mid rival battle; the raw `measure` output as text.
 
 ## 9. Open questions
 
-1. Launch on a recorded MP4, or hold for a live Twitch stream? `SHARED.md` says stream,
-   section 8 loosens it; holding makes Twitch a v0.1 dependency.
-2. Overlay: every option's probability, or the top three? All of them is honest and the
-   better screenshot, and also a wall of bars.
-3. Ship the `GameState` decoder as its own package now, or keep it here until someone asks?
+Answered by the user 2026-09-18, before the build:
+
+1. **Launch on a recorded MP4.** Twitch moves to v0.2 and stops being a v0.1 dependency.
+2. **The overlay shows every option's probability, sorted.** Not the top three.
+3. **The `GameState` decoder stays in this repo** (`src/jpp/`), importable, and is not
+   split into its own package until someone asks.
 
 ## Review round 2: responses
 
@@ -381,3 +400,20 @@ Round 1: all six applied, none refused.
 ## Review round 3: responses
 
 - Input readiness: task 2 now names the candidate WRAM bytes `probe` prints and makes discovering the predicate an explicit step with a written outcome, not an assumption.
+
+## Build notes, 2026-09-18
+
+Built through task 9 with no ROM and a rate-limited gateway shim. What changed here as a
+result:
+
+- Section 1's differentiator was rewritten after re-reading `milanboers/jev-plays-pokemon`.
+  "Both incumbents stop at it moves" was false. The reusable decoder is no longer a
+  headline claim, and the repo name is taken.
+- Section 2's `leave_house` predicate is now "not in either house map". `wCurMap == $00`
+  un-completes itself as soon as the next goal walks into the lab.
+- `wBattleResult` is not in a `UNION`; `00c` section E guessed wrong. The latch stays.
+
+Still open, both needing a cartridge: the `input_ready()` predicate in `src/jpp/loop.py` is
+a two-byte best guess (`wJoyIgnore`, `wWalkCounter`) and the battle-menu button
+choreography in `src/jpp/options.py` is written from the menu layout. `jpp probe` settles
+both; the README says how.

@@ -1,0 +1,10 @@
+*.gb
+*.gbc
+*.state
+runs/
+measure.json
+demo/*.mov
+demo/*.mp4
+__pycache__/
+.venv/
+.pytest_cache/
