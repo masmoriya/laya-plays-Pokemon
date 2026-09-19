@@ -42,28 +42,51 @@ ffmpeg -y -framerate 30 -i /tmp/frames/f%05d.png -i /tmp/pal.png \
   demo/overlay.gif
 ```
 
-A 6 second draft came out at 186 KB of MP4 and 298 KB of GIF, so the 5 MB ceiling is not
-close. Raise `-crf` only if a longer cut needs it.
+The three clips below came out at 409 KB, 259 KB and 118 KB, and the GIF at 522 KB. The
+5 MB ceiling is not close. Raise `-crf` only if a longer cut needs it.
 
-Stills come out of the frame dump directly. Pick the frame number and copy the PNG.
+## Stand-in rows never reach a frame
+
+A bar drawn from a hash looks exactly like a bar drawn from an answer, and nothing on
+screen tells them apart, so rows tagged `"source": "fake"` are dropped before rendering.
+`--include-stand-ins` puts them back and must never be used for a clip. The current run is
+40 rows, 20 of them real, so the master is 20 decisions and 13.3 seconds.
+
+Publish the number from the same rows the clip shows, or the tweet and the video disagree:
+
+```
+uv run python -c 'import json; rows=[json.loads(l) for l in open("fixtures/runs/sample.jsonl")]; \
+  open("/tmp/real.jsonl","w").write("".join(json.dumps(r)+chr(10) for r in rows if r.get("source")!="fake"))'
+uv run measure /tmp/real.jsonl
+```
 
 ## Shot list
 
-| clip | seconds | how |
-|------|---------|-----|
-| a. rival battle, bars flipping as HP drops | 12 | `--skip 0 --seconds 12` |
-| b. overworld tie, two directions and the pick | 8 | `--skip 9 --seconds 8` |
-| c. ticker close-up | 6 | `--skip 30 --seconds 6`, crop to the bottom 300px |
+Render the master once, then cut from it. All three clips are frame ranges of the same
+dump, so they cannot drift from each other.
 
-Stills: a mid-battle frame with five bars, a frame mid-reveal on the payload card, and the
-`uv run measure` output as terminal text.
+```
+SDL_VIDEODRIVER=dummy uv run jpp overlay --replay fixtures/runs/sample.jsonl \
+  --demo --frames /tmp/master --seconds 13.3
+```
+
+| clip | seconds | frames | file |
+|------|---------|--------|------|
+| a. rival battle, bars flipping as HP drops | 12 | 0-359 | `demo/clip-a-battle.mp4` |
+| b. overworld tie, two directions and the pick | 8 | 120-359 | `demo/clip-b-overworld.mp4` |
+| c. ticker close-up, cropped to the bottom 300px | 6 | 219-398 | `demo/clip-c-ticker.mp4` |
+
+Cut b and c with `-start_number` and `-frames:v`, and c with `-vf "crop=1080:300:0:1046"`.
+
+Stills, committed because the README and the thread use them: `still-bars.png` (five bars
+mid battle), `still-payload.png` (the payload card mid reveal), `still-measure.txt` (the
+measure line as text).
 
 ## Before any of this is posted
 
-- The feed panel says `no emulator attached: recorded run` until `ROM_PATH` exists. A clip
-  with an empty panel is not the clip. Get the ROM in first.
-- `fixtures/runs/sample.jsonl` is still mostly `"source": "fake"` and carries no latency,
-  because the gateway free tier rate-limits `typesafe-ai/jev` after about five requests
-  regardless of credit balance. Paid credits, then re-run `fixtures/make_run.py`, then
-  re-render.
+- The feed panel says `live feed needs  jpp play --rom` until a ROM exists. A clip with an
+  empty panel is not the clip. Get the ROM in first.
+- The gateway free tier rate-limits `typesafe-ai/jev` after about five requests regardless
+  of credit balance, and the window refills over hours. A 40 row run costs roughly half its
+  rows to stand-ins. Paid credits, re-run `fixtures/make_run.py`, re-render.
 - Label the clip a replay in the post whenever the feed panel is empty. Never imply live.

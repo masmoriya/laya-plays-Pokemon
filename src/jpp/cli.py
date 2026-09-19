@@ -131,10 +131,11 @@ def cmd_overlay(args):
             rate=rate,
             seconds=args.seconds,
             skip=args.skip,
+            include_stand_ins=args.include_stand_ins,
         )
         print(f"{n} frames -> {args.frames}")
         return
-    run_replay(args.replay, rate=rate)
+    run_replay(args.replay, rate=rate, include_stand_ins=args.include_stand_ins)
 
 
 def main(argv=None):
@@ -160,7 +161,7 @@ def main(argv=None):
     p.add_argument(
         "--overlay",
         action="store_true",
-        help="the 1280x720 window beside the game; slower on purpose, never the headline",
+        help="the 1080x1350 window beside the game; slower on purpose, never the headline",
     )
     p.add_argument("--max-decisions", type=int, default=50)
     p.add_argument("--out")
@@ -184,6 +185,11 @@ def main(argv=None):
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--seconds", type=float, default=None)
     p.add_argument("--skip", type=int, default=0, help="start at this decision")
+    p.add_argument(
+        "--include-stand-ins",
+        action="store_true",
+        help="also draw rows tagged source=fake; never use this for a clip",
+    )
     p.set_defaults(func=cmd_overlay)
 
     args = parser.parse_args(argv)

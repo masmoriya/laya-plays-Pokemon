@@ -1,17 +1,22 @@
 # Launch copy
 
-Nothing here goes out until a ROM run exists and the numbers below are re-measured. Every
-number in this file is provisional: n=4 calls through the gateway shim, not the direct API.
+Nothing here goes out until a ROM run exists. Every number in this file is measured but
+provisional: n=20 calls through the gateway shim over synthetic RAM with no emulator
+attached, not the direct API and not a real playthrough.
 
 ## The measurement problem with the current hook
 
 CONTEXT section 1 and section 8 both say the model "decides in about a hundred
-milliseconds". Measured, it does not. Four fresh cassettes recorded 2026-09-18:
+milliseconds". Measured over 20 real calls, it does not:
 
 ```
-923.9 ms   885.8 ms   674.7 ms   861.1 ms
-mean 836 ms   1.2 decisions/sec   $0.17/hour at 920 input tokens a call
+1.25 decisions/sec, $0.1601/hour (n=20 Jev calls over 1 run, synthetic RAM,
+  call latency only, no emulator)
+Brier 0.1532 on faints_this_turn (n=10 turns, base 0.2, constant-predictor 0.16,
+  95% CI 0.059-0.2474)
 ```
+
+Per call that is about 800 ms, range 530 to 1236.
 
 That is through `tools/jev-proxy` to the Vercel gateway, so some of it is the shim. It is
 still eight times slower than the claim. The direct API may well be faster, but until
@@ -28,8 +33,8 @@ I gave Pokemon Red to a model that cannot write a sentence.
 It picks from a menu in under a second, and I measured whether its confidence
 means anything.
 
-__ decisions/sec, $__/hour. Brier __ on "will my Pokemon faint this turn"
-(n=__, base rate __, constant predictor __).
+1.25 decisions/sec, $0.16/hour. Brier 0.153 on "will my Pokemon faint this
+turn" (n=10, base rate 0.20, constant predictor 0.16).
 ```
 
 **2, with the payload still**
@@ -49,9 +54,9 @@ moves. The model only gets asked where the game actually forks.
 ```
 The calibration number is the part I would push back on if someone else posted it.
 
-Brier __ on n=__ turns, 95% CI __ to __. The constant predictor scores __. If the
-interval straddles that, I have not beaten "always guess the base rate" yet, and
-the README says so.
+Brier 0.153 on n=10 turns, 95% CI 0.059 to 0.247. The constant predictor scores
+0.16. That interval straddles it, so I have not shown I beat "always guess the
+base rate". n=10 is far too small to claim anything, and the README says so.
 
 Prior art: Claude Plays Pokemon is the famous one. milanboers/jev-plays-pokemon
 got there first with Jev and plays more of the game than this does.

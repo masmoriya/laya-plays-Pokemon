@@ -93,3 +93,15 @@ def test_bar_width_depends_on_elapsed_time_not_on_how_often_draw_ran():
         finally:
             pygame.quit()
     assert abs(widths[0] - widths[1]) < 1e-9
+
+
+def test_stand_in_rows_never_reach_a_frame_unless_asked_for(tmp_path):
+    run = tmp_path / "run.jsonl"
+    run.write_text(
+        json.dumps(RECORD | {"source": "jev"})
+        + "\n"
+        + json.dumps(RECORD | {"source": "fake"})
+        + "\n"
+    )
+    assert len(overlay._replay_source(run)[0]) == 1
+    assert len(overlay._replay_source(run, include_stand_ins=True)[0]) == 2

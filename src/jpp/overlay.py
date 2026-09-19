@@ -25,7 +25,7 @@ GOAL_Y = 830
 BAR_TOP, BAR_H, BAR_GAP, BAR_MAX = 896, 44, 12, 5
 FOOT_Y = 1172
 TICKER_Y = 1258
-ANIMATION_MS = 220
+ANIMATION_MS = 140
 PULSE_MS = 420
 REVEAL_MS = 260
 
@@ -105,7 +105,7 @@ class Overlay:
         self.goal_font = _sans(30, bold=True)
         self.label = _sans(26, bold=True)
         self.value = _font(28, bold=True)
-        self.ticker = _font(42, bold=True)
+        self.ticker = _font(38, bold=True)
         self.noul = _font(24)
         self.shown: dict[str, float] = {}
         self.previous: dict[str, float] = {}
@@ -294,6 +294,8 @@ class Overlay:
             text = f"{rate:.1f} dec/s    ${per_hour:.2f}/hr    {brier}"
         else:
             text = f"dec/s not measured    {brier}"
+        # fit, not clip: n grows through the run and silently ate its own digits
+        text = fit(self.ticker, text, W - 2 * MARGIN)
         self.screen.blit(self.ticker.render(text, True, FG), (MARGIN, TICKER_Y))
         last = timed[-1] if timed else 0.0
         note = (
@@ -303,7 +305,7 @@ class Overlay:
         )
         self.screen.blit(self.small.render(note, True, MUTED), (MARGIN, TICKER_Y + 52))
         self._draw_sparkline(
-            pygame.Rect(W // 2 + 10, TICKER_Y + 54, W // 2 - MARGIN - 10, 26)
+            pygame.Rect(W // 2 + 10, TICKER_Y + 58, W // 2 - MARGIN - 10, 24)
         )
 
     def _draw_sparkline(self, box):
@@ -319,14 +321,18 @@ class Overlay:
         pygame.draw.lines(self.screen, ACCENT, False, points, 2)
 
 
-def _replay_source(path: Path):
+def _replay_source(path: Path, include_stand_ins=False):
+    """Stand-in rows are dropped by default: a bar drawn from a hash looks exactly like
+    a bar drawn from an answer, and nothing on screen tells them apart."""
     records = measure.load([path])[0]
+    if not include_stand_ins:
+        records = [r for r in records if r.get("source") != "fake"]
     return records, measure.pairs(records)
 
 
-def run_replay(path: Path, rate: float = 2.0):
+def run_replay(path: Path, rate: float = 2.0, include_stand_ins=False):
     """Play a run file back so the clip can be recorded with no ROM in sight."""
-    records, labelled = _replay_source(path)
+    records, labelled = _replay_source(path, include_stand_ins)
     overlay = Overlay(f"jev-plays-pokemon: {path.name}", live=False)
     index, next_at = 0, 0.0
     running = True
@@ -341,13 +347,16 @@ def run_replay(path: Path, rate: float = 2.0):
     pygame.quit()
 
 
-def render_frames(path: Path, out: Path, fps=30, rate=1.5, seconds=None, skip=0):
+def render_frames(
+    path: Path, out: Path, fps=30, rate=1.5, seconds=None, skip=0,
+    include_stand_ins=False,
+):
     """Walk the same draw calls on a fake clock and dump one PNG per frame.
 
     Deterministic, so a clip is exactly as long as it says and ffmpeg can encode it
     without a screen recorder, a cursor, or window chrome in the shot.
     """
-    records, labelled = _replay_source(path)
+    records, labelled = _replay_source(path, include_stand_ins)
     records = records[skip:]
     seconds = seconds if seconds is not None else len(records) / rate
     out.mkdir(parents=True, exist_ok=True)

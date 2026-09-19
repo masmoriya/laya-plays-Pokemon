@@ -1,0 +1,3 @@
+1.25 decisions/sec, $0.1601/hour (n=20 Jev calls over 1 run, synthetic RAM, call latency only, no emulator)
+Brier 0.1532 on faints_this_turn (n=10 turns, base 0.2, constant-predictor 0.16, 95% CI 0.059-0.2474)
+wrote measure.json
