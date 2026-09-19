@@ -18,6 +18,7 @@ FRAMES_PER_TICK = 8  # one decode per 8 frames, ~7.5 decodes a second at 60 fps
 PRESS_FRAMES = 4
 NO_PROGRESS_CAP = 40  # decisions per goal with no progress, CONTEXT section 3
 BLOCKED_AFTER = 2  # presses of one direction from one tile before calling it a wall
+STEP_SETTLE = 4  # extra ticks to let a walking step land before judging it blocked
 
 
 def input_ready(state, button: str) -> bool:
@@ -79,6 +80,7 @@ class Driver:
         # stepping walks into a wall forever without this: the collision grid is the
         # screen's opinion, and an NPC or a ledge is not in it.
         self.stuck: dict[str, int] = {}
+        self.heading: str | None = None  # last direction that actually moved the player
 
     def tick(self, frames: int = FRAMES_PER_TICK):
         self.emu.tick(frames)
@@ -95,8 +97,18 @@ class Driver:
         before = self._where()
         self.emu.button(button, PRESS_FRAMES)
         state = self.tick()
+        if button in route.DIRECTIONS:
+            # a step takes more than one tick of frames to land. Judging it after one
+            # reads every real step as a wall, and two of those retire the axis: the
+            # walk stops short of the waypoint and falls through to pressing A forever.
+            for _ in range(STEP_SETTLE):
+                if self._where() != before:
+                    break
+                state = self.tick()
         if self._where() != before:
             self.stuck.clear()
+            if button in route.DIRECTIONS:
+                self.heading = button
         elif button in route.DIRECTIONS:
             self.stuck[button] = self.stuck.get(button, 0) + 1
         return state
@@ -152,11 +164,19 @@ def classify(driver: Driver, goal, waypoint) -> tuple[str, object]:
             )
             return "branch", branch
         return _press(st, "a")
-    if st.text_box_id:
-        return _press(st, "a")  # a text box with no cursor: A costs nothing
+    if st.font_loaded:
+        # a text box with no cursor: A costs nothing. wFontLoaded, not wTextBoxID: the
+        # latter holds the id of the last box drawn and never clears, so on a cartridge
+        # it reads 1 from the intro onward and the agent presses A forever
+        return _press(st, "a")
     step = route.next_step(st, waypoint)
     if step and not driver.blocked(step):
         return _press(st, step)
+    if waypoint and step is None and driver.heading:
+        # standing on the waypoint. Stairs warp the moment they are stepped on, but a
+        # house door leaves the player on the mat and wants one more step through it,
+        # which is the direction that got us here.
+        return _press(st, driver.heading)
     if step and route.distance(st, waypoint) == 1:
         # the waypoint is the next tile and it will not be walked onto: it is an object,
         # Oak or a poke ball. Walking into it already turned the player to face it.
