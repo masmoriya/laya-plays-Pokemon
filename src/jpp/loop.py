@@ -16,6 +16,7 @@ from .policy import Decision, Policy
 
 FRAMES_PER_TICK = 8  # one decode per 8 frames, ~7.5 decodes a second at 60 fps
 PRESS_FRAMES = 4
+TURN_SETTLE_TICKS = 120  # cap on waiting for a battle turn to play out
 NO_PROGRESS_CAP = 40  # decisions per goal with no progress, CONTEXT section 3
 BLOCKED_AFTER = 2  # presses of one direction from one tile before calling it a wall
 STEP_SETTLE = 4  # extra ticks to let a walking step land before judging it blocked
@@ -71,8 +72,11 @@ class BattleLatch:
 class Driver:
     """Emulator plus the decoded snapshot, one tick at a time."""
 
-    def __init__(self, emulator):
+    def __init__(self, emulator, on_frame=None):
         self.emu = emulator
+        # set only when a clip is being captured: the loop then advances one frame at a
+        # time so the recording gets every frame, not one in eight
+        self.on_frame = on_frame
         self.latch = BattleLatch()
         self.state = None
         self.turn = 0  # turns inside the current battle, reset when one ends
@@ -83,7 +87,12 @@ class Driver:
         self.heading: str | None = None  # last direction that actually moved the player
 
     def tick(self, frames: int = FRAMES_PER_TICK):
-        self.emu.tick(frames)
+        if self.on_frame is None:
+            self.emu.tick(frames)
+        else:
+            for _ in range(frames):
+                self.emu.tick(1)
+                self.on_frame(self.emu)
         self.state = decode(self.emu.memory)
         before = self.latch.count
         self.latch.update(
@@ -149,6 +158,16 @@ def probe(emulator, ticks: int, out=print, every: int = 8):
     return driver
 
 
+def battle_ready(state) -> bool:
+    """Whether wBattleMon and wEnemyMon hold a battle yet.
+
+    Both are zeroed through the encounter intro, and every menu byte lies about it, so a
+    branch taken on the flag alone asks about a level 0 MON_00 with no moves.
+    """
+    active, opponent = state.battle.active, state.battle.opponent
+    return bool(active and opponent and active.level and opponent.level)
+
+
 def classify(driver: Driver, goal, waypoint) -> tuple[str, object]:
     """Code decides what kind of tick this is. Only two answers reach Jev.
 
@@ -156,14 +175,18 @@ def classify(driver: Driver, goal, waypoint) -> tuple[str, object]:
     """
     st = driver.state
     if st.in_battle:
-        if st.max_menu_item > 0 or st.menu_item > 0:
-            if st.joy_ignore & (S.PAD_A | S.PAD_CTRL_PAD):
-                return "wait", None  # the menu is up but the script still owns the pad
-            branch = options.battle_branch(
-                st, goal, items=options.bag(driver.emu.memory), turn=driver.turn
-            )
-            return "branch", branch
-        return _press(st, "a")
+        if not battle_ready(st):
+            # "BLUE wants to fight!" is on screen and wBattleMon is still zeroed. The
+            # menu bytes cannot say so: wMaxMenuItem keeps the name list's 3 forever and
+            # wFontLoaded is overworld-only, so battle text leaves it at 0. The structs
+            # being filled in is the one signal that means the menu is really up.
+            return _press(st, "a")
+        if st.joy_ignore & (S.PAD_A | S.PAD_CTRL_PAD):
+            return "wait", None  # the menu is up but the script still owns the pad
+        branch = options.battle_branch(
+            st, goal, items=options.bag(driver.emu.memory), turn=driver.turn
+        )
+        return "branch", branch
     if st.font_loaded:
         # a text box with no cursor: A costs nothing. wFontLoaded, not wTextBoxID: the
         # latter holds the id of the last box drawn and never clears, so on a cartridge
@@ -204,9 +227,10 @@ def play(
     log_path: Path | None = None,
     on_decision=None,
     max_ticks: int = 200_000,
+    on_frame=None,
 ) -> list[dict]:
     """Run until the goal stack empties or `max_decisions` Jev calls have happened."""
-    driver = Driver(emulator)
+    driver = Driver(emulator, on_frame=on_frame)
     stack = goals.GoalStack()
     records: list[dict] = []
     log = log_path.open("a") if log_path else None
@@ -240,6 +264,8 @@ def play(
             asked_on = driver.state
             for button in options.buttons_for(driver.state, payload, decision.option):
                 driver.press(button)
+            if payload.kind == "battle":
+                settle_turn(driver)
             record = _record(goal, payload, decision, driver, asked_on)
             records.append(record)
             if log:
@@ -252,6 +278,32 @@ def play(
         if log:
             log.close()
     return records
+
+
+def _battle_signature(state) -> tuple:
+    active, opponent = state.battle.active, state.battle.opponent
+    return (
+        state.in_battle,
+        active.hp if active else None,
+        opponent.hp if opponent else None,
+        state.active_slot,
+    )
+
+
+def settle_turn(driver: Driver):
+    """Advance until the chosen move has actually resolved.
+
+    The battle menu is back up long before the turn is over, and every byte that could
+    say otherwise is stale, so without this the same unchanged turn is asked again on the
+    next tick: one rival battle billed 139 decisions, eight of them identical at full HP.
+    """
+    before = _battle_signature(driver.state)
+    for _ in range(TURN_SETTLE_TICKS):
+        driver.tick()
+        if _battle_signature(driver.state) != before:
+            return
+        if input_ready(driver.state, "a"):
+            driver.press("a")  # damage text, level ups, whatever is between turns
 
 
 def _progress(driver: Driver) -> tuple:

@@ -59,8 +59,11 @@ WAYPOINTS: dict[str, dict[int, object]] = {
         S.PALLET_TOWN: _pallet_town,
         S.OAKS_LAB: _oaks_lab,
     },
-    # the rival battle happens where we stand; no walking
-    "win_lab_rival": {},
+    # the rival does not challenge on the spot. He intercepts on the way out, so the
+    # goal still has to walk: OaksLab.asm warp_event 4, 11 and 5, 11 are the door.
+    "win_lab_rival": {
+        S.OAKS_LAB: (5, 11),
+    },
     # PALLET_TOWN is 10x9 blocks, ROUTE_1 10x18: head north up the middle
     "reach_viridian": {
         S.PALLET_TOWN: (10, 0),

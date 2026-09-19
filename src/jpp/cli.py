@@ -85,11 +85,18 @@ def cmd_play(args):
     log = Path(args.out) if args.out else RUNS / "run.jsonl"
     emu = _pyboy(
         args.rom,
-        window=not (args.headless or args.overlay),
+        window=not (args.headless or args.overlay or args.frames),
         unthrottled=args.headless and not args.overlay,
     )
+    if args.state:
+        with open(args.state, "rb") as f:
+            emu.load_state(f)
     client = policy.JevClient(replay_dir=args.replay)
-    on_decision = _overlay_feed(emu) if args.overlay else None
+    on_decision, on_frame = None, None
+    if args.frames:
+        on_decision, on_frame = _frame_capture(Path(args.frames), args.every)
+    elif args.overlay:
+        on_decision = _overlay_feed(emu)
     try:
         records = play(
             emu,
@@ -97,6 +104,7 @@ def cmd_play(args):
             max_decisions=args.max_decisions,
             log_path=log,
             on_decision=on_decision,
+            on_frame=on_frame,
         )
     finally:
         emu.stop(save=False)
@@ -122,6 +130,37 @@ def _overlay_feed(emu):
         overlay.draw(emu.screen.ndarray)
 
     return feed
+
+
+def _frame_capture(out: Path, every: int):
+    """Draw the overlay over the live game and dump a PNG per captured frame.
+
+    Every emulator frame passes through, so the game moves at its own speed in the clip
+    rather than at the agent's decision rate; `every` thins 60 fps down to the video rate.
+    """
+    import pygame
+
+    from . import measure
+    from .overlay import Overlay
+
+    out.mkdir(parents=True, exist_ok=True)
+    overlay = Overlay("jev plays pokemon", live=True)
+    seen: list[dict] = []
+    count = [0, 0]
+
+    def on_decision(record):
+        seen.append(record)
+        overlay.feed(record, labelled=measure.pairs(seen))
+
+    def on_frame(emu):
+        count[0] += 1
+        if count[0] % every:
+            return
+        overlay.draw(emu.screen.ndarray)
+        pygame.image.save(overlay.screen, str(out / f"f{count[1]:05d}.png"))
+        count[1] += 1
+
+    return on_decision, on_frame
 
 
 def cmd_overlay(args):
@@ -176,6 +215,9 @@ def main(argv=None):
     p.add_argument(
         "--no-jev", action="store_true", help="code defaults only, for a baseline"
     )
+    p.add_argument("--state", help="save state to start from, eg red-bedroom.state")
+    p.add_argument("--frames", help="dump the overlay over the live game here, as PNGs")
+    p.add_argument("--every", type=int, default=2, help="capture 1 frame in N (60/N fps)")
     p.set_defaults(func=cmd_play)
 
     p = sub.add_parser(
