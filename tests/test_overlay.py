@@ -105,3 +105,15 @@ def test_stand_in_rows_never_reach_a_frame_unless_asked_for(tmp_path):
     )
     assert len(overlay._replay_source(run)[0]) == 1
     assert len(overlay._replay_source(run, include_stand_ins=True)[0]) == 2
+
+
+def test_a_fallback_row_is_not_priced_as_a_jev_call():
+    """Its latency is a failed attempt, seconds of retry under a rate limit."""
+    view = overlay.Overlay()
+    try:
+        view.feed(RECORD | {"latency_ms": 4000.0, "fell_back": True})
+        assert overlay.measured_rate(view.latencies) is None
+        view.feed(RECORD | {"latency_ms": 500.0, "fell_back": False})
+        assert abs(overlay.measured_rate(view.latencies) - 2.0) < 1e-9
+    finally:
+        pygame.quit()

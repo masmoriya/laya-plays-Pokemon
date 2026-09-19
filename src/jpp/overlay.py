@@ -131,7 +131,11 @@ class Overlay:
         self.changed_at = self._clock()
         self.decisions += 1
         self.tokens += record.get("input_tokens") or 0
-        self.latencies = (self.latencies + [record.get("latency_ms") or 0.0])[-60:]
+        # a fallback row carries the time the failed attempt took, which on a rate limit
+        # is seconds of retry. It is not a Jev call and must not price one: counting it
+        # printed 0.5 dec/s and $0.03/hr off four rows that never reached the model
+        timed = 0.0 if record.get("fell_back") else (record.get("latency_ms") or 0.0)
+        self.latencies = (self.latencies + [timed])[-60:]
         if labelled is not None:
             self.labelled = labelled
 
@@ -289,8 +293,9 @@ class Overlay:
             if self.labelled
             else "Brier pending"
         )
-        if rate and self.decisions:
-            per_hour = cost_usd(self.tokens) / self.decisions * rate * 3600
+        answered = sum(1 for ms in self.latencies if ms) or 1
+        if rate:
+            per_hour = cost_usd(self.tokens) / answered * rate * 3600
             text = f"{rate:.1f} dec/s    ${per_hour:.2f}/hr    {brier}"
         else:
             text = f"dec/s not measured    {brier}"
