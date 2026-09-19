@@ -76,3 +76,20 @@ def test_render_frames_writes_one_png_per_frame(tmp_path):
     out = tmp_path / "frames"
     assert overlay.render_frames(run, out, fps=10, rate=2.0, seconds=1) == 10
     assert sorted(p.name for p in out.glob("*.png"))[:2] == ["f00000.png", "f00001.png"]
+
+
+def test_bar_width_depends_on_elapsed_time_not_on_how_often_draw_ran():
+    """A still grabbed from a 30 fps dump must match one from a 60 fps window."""
+    widths = []
+    for draws in (2, 20):
+        view = overlay.Overlay()
+        try:
+            view.now = 0.0
+            view.feed(RECORD)
+            for i in range(draws):
+                view.now = 0.15 * (i + 1) / draws
+                view.draw(None)
+            widths.append(view.shown["use_move_ember"])
+        finally:
+            pygame.quit()
+    assert abs(widths[0] - widths[1]) < 1e-9

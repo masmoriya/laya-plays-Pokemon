@@ -108,6 +108,7 @@ class Overlay:
         self.ticker = _font(42, bold=True)
         self.noul = _font(24)
         self.shown: dict[str, float] = {}
+        self.previous: dict[str, float] = {}
         self.target: dict[str, float] = {}
         self.changed_at = 0.0
         self.now = None  # set by render_frames to walk a fake clock
@@ -126,6 +127,7 @@ class Overlay:
         # keep only the options this decision offered: a move from a previous battle
         # would otherwise sit at zero in the bar list for the rest of the run
         self.shown = {k: self.shown.get(k, 0.0) for k in self.target}
+        self.previous = dict(self.shown)  # bars lerp from here, not from themselves
         self.changed_at = self._clock()
         self.decisions += 1
         self.tokens += record.get("input_tokens") or 0
@@ -193,9 +195,13 @@ class Overlay:
         )
 
     def _draw_bars(self):
+        # lerp from where the bar was when this decision arrived, so the drawn width
+        # depends on elapsed time and not on how many times draw() happened to run
         progress = min(1.0, self._since() / ANIMATION_MS)
+        eased = 1 - (1 - progress) ** 3
         for key in self.shown:
-            self.shown[key] += (self.target.get(key, 0.0) - self.shown[key]) * progress
+            start = self.previous.get(key, 0.0)
+            self.shown[key] = start + (self.target.get(key, 0.0) - start) * eased
         label_w, value_w = 300, 96
         track_x = MARGIN + label_w
         track_w = W - 2 * MARGIN - label_w - value_w

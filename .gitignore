@@ -8,3 +8,4 @@ demo/*.mp4
 __pycache__/
 .venv/
 .pytest_cache/
+demo/*-draft.*
