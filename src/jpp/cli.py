@@ -32,14 +32,15 @@ def _file(path: str) -> Path:
     return where
 
 
-def _pyboy(rom: Path, headless: bool):
+def _pyboy(rom: Path, window: bool, unthrottled: bool):
+    """Two separate switches. The overlay wants a frame but not a second window: pygame
+    and pyboy ship different SDL2 builds, and letting both open one crashes the process.
+    """
     from pyboy import PyBoy
 
-    emu = PyBoy(str(rom), window="null" if headless else "SDL2")
-    if headless:
-        emu.set_emulation_speed(
-            0
-        )  # unthrottled: the decisions/sec number is taken here
+    emu = PyBoy(str(rom), window="SDL2" if window else "null")
+    if unthrottled:
+        emu.set_emulation_speed(0)  # the decisions/sec number is taken here
     return emu
 
 
@@ -70,7 +71,7 @@ def cmd_state(args):
 def cmd_probe(args):
     from .loop import probe
 
-    emu = _pyboy(args.rom, headless=False)
+    emu = _pyboy(args.rom, window=True, unthrottled=False)
     try:
         probe(emu, ticks=args.ticks)
     finally:
@@ -82,7 +83,11 @@ def cmd_play(args):
 
     RUNS.mkdir(exist_ok=True)
     log = Path(args.out) if args.out else RUNS / "run.jsonl"
-    emu = _pyboy(args.rom, headless=args.headless and not args.overlay)
+    emu = _pyboy(
+        args.rom,
+        window=not (args.headless or args.overlay),
+        unthrottled=args.headless and not args.overlay,
+    )
     client = policy.JevClient(replay_dir=args.replay)
     on_decision = _overlay_feed(emu) if args.overlay else None
     try:
