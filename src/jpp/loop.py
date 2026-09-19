@@ -9,7 +9,7 @@ import json
 import time
 from pathlib import Path
 
-from . import goals, options, route, symbols as S
+from . import goals, options, route, screen, symbols as S
 from .decode import decode
 from .options import Branch
 from .policy import Decision, Policy
@@ -187,6 +187,11 @@ def classify(driver: Driver, goal, waypoint) -> tuple[str, object]:
             st, goal, items=options.bag(driver.emu.memory), turn=driver.turn
         )
         return "branch", branch
+    prompt = screen.yes_no_prompt(driver.emu.memory)
+    if prompt:
+        # a cursor is up and A would just take whatever it is sitting on, which said YES
+        # to "give a nickname?" and then mashed the keyboard into AAAAAAAAAAAA
+        return "branch", options.dialogue_branch(st, goal, prompt[0], prompt[1])
     if st.font_loaded:
         # a text box with no cursor: A costs nothing. wFontLoaded, not wTextBoxID: the
         # latter holds the id of the last box drawn and never clears, so on a cartridge
