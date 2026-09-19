@@ -181,8 +181,13 @@ class Overlay:
             self.screen.blit(pygame.transform.scale(surface, FEED.size), FEED)
         else:
             pygame.draw.rect(self.screen, BG, FEED, border_radius=6)
-            note = self.small.render("no emulator attached: recorded run", True, MUTED)
-            self.screen.blit(note, note.get_rect(center=FEED.center))
+            for i, line in enumerate(
+                ("replaying a recorded run", "live feed needs  jpp play --rom")
+            ):
+                note = self.small.render(line, True, MUTED)
+                self.screen.blit(
+                    note, note.get_rect(center=(FEED.centerx, FEED.centery + i * 30))
+                )
 
     def _draw_goal(self):
         goal = self.record["state"].get("goal", self.record["goal"])
