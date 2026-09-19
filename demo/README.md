@@ -62,30 +62,31 @@ uv run measure /tmp/real.jsonl
 
 ## Shot list
 
-Render the master once, then cut from it. All three clips are frame ranges of the same
-dump, so they cannot drift from each other.
+With a ROM, the clip is the live game, not a replay. `jpp play --frames` draws the
+overlay over the running emulator and dumps a PNG per captured frame, `--every 2` for
+30 fps.
 
 ```
-SDL_VIDEODRIVER=dummy uv run jpp overlay --replay fixtures/runs/sample.jsonl \
-  --demo --frames /tmp/master --seconds 13.3
+uv run python fixtures/make_state.py red-bedroom.state        # drives the intro
+SDL_VIDEODRIVER=dummy JEV_BASE_URL=http://127.0.0.1:4322 uv run jpp play \
+  --rom "$POKEMON_ROM" --state rival-battle.state \
+  --frames /tmp/final --every 2 --max-decisions 10 --out runs/final.jsonl
 ```
 
-| clip | seconds | frames | file |
-|------|---------|--------|------|
-| a. rival battle, bars flipping as HP drops | 12 | 0-359 | `demo/clip-a-battle.mp4` |
-| b. overworld tie, two directions and the pick | 8 | 120-359 | `demo/clip-b-overworld.mp4` |
-| c. ticker close-up, cropped to the bottom 300px | 6 | 219-398 | `demo/clip-c-ticker.mp4` |
+Save a state at the branch you want to film first, or the clip opens with a minute of
+walking: the route is code-owned, so nothing is asked between the bedroom and the lab.
 
-Cut b and c with `-start_number` and `-frames:v`, and c with `-vf "crop=1080:300:0:1046"`.
+Cut the clip to the decisions that were actually answered. Under the free tier that is
+about the first five, and a fallback draws its options greyed with NO ANSWER over them,
+which is honest but is not the shot.
 
-Stills, committed because the README and the thread use them: `still-bars.png` (five bars
-mid battle), `still-payload.png` (the payload card mid reveal), `still-measure.txt` (the
-measure line as text).
+Stills come straight out of the frame dump.
 
 ## Before any of this is posted
 
-- The feed panel says `live feed needs  jpp play --rom` until a ROM exists. A clip with an
-  empty panel is not the clip. Get the ROM in first.
+- `demo/clip-live-battle.mp4` is 10 seconds because only one decision in that capture was
+  answered before the free tier cut in. The full battle, won, needs a window with five or
+  more calls in it.
 - The gateway free tier rate-limits `typesafe-ai/jev` after about five requests regardless
   of credit balance, and the window refills over hours. A 40 row run costs roughly half its
   rows to stand-ins. Paid credits, re-run `fixtures/make_run.py`, re-render.

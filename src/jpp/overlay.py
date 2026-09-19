@@ -123,7 +123,11 @@ class Overlay:
 
     def feed(self, record: dict, labelled=None):
         self.record = record
-        self.target = dict(record.get("probabilities") or {})
+        # a fallback has no probabilities, and blanking the panel reads as broken rather
+        # than as what it is: the options are still real, nothing answered about them
+        self.target = dict(record.get("probabilities") or {}) or {
+            k: 0.0 for k in (record.get("options") or {})
+        }
         # keep only the options this decision offered: a move from a previous battle
         # would otherwise sit at zero in the bar list for the rest of the run
         self.shown = {k: self.shown.get(k, 0.0) for k in self.target}
@@ -215,12 +219,19 @@ class Overlay:
         track_x = MARGIN + label_w
         track_w = W - 2 * MARGIN - label_w - value_w
         chosen = self.record.get("choice")
+        if self.record.get("fell_back"):
+            self.screen.blit(
+                self.small.render(
+                    "NO ANSWER: RATE LIMITED, CODE DEFAULT", True, MUTED
+                ),
+                (MARGIN, BAR_TOP - 26),
+            )
         ordered = sorted(
             self.shown.items(), key=lambda kv: -self.target.get(kv[0], 0.0)
         )
         for i, (key, value) in enumerate(ordered[:BAR_MAX]):
             y = BAR_TOP + i * (BAR_H + BAR_GAP)
-            picked = key == chosen
+            picked = key == chosen and not self.record.get("fell_back")
             name = fit(self.label, pretty(key), label_w - 16)
             self.screen.blit(
                 self.label.render(name, True, FG if picked else MUTED),

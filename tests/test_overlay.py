@@ -117,3 +117,15 @@ def test_a_fallback_row_is_not_priced_as_a_jev_call():
         assert abs(overlay.measured_rate(view.latencies) - 2.0) < 1e-9
     finally:
         pygame.quit()
+
+
+def test_a_fallback_still_draws_its_options():
+    """Blanking the panel reads as broken; the options were real, nothing answered."""
+    view = overlay.Overlay()
+    try:
+        view.feed(RECORD | {"probabilities": {}, "fell_back": True})
+        assert set(view.target) == set(RECORD["options"])
+        assert all(v == 0.0 for v in view.target.values())
+        assert view.draw(None)
+    finally:
+        pygame.quit()
