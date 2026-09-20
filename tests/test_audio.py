@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+import numpy as np
+
 from jpp.audio import AudioSink
 
 
@@ -81,3 +85,20 @@ def test_fast_forward_silences_and_flushes_audio():
     sink.set_speed(1.0)
     assert sink._realtime
     assert sink.channel.volume == 1.0
+
+
+def test_feed_uses_only_pyboys_valid_stereo_samples():
+    sink = AudioSink.__new__(AudioSink)
+    sink.enabled = True
+    sink._realtime = True
+    sink._pending = bytearray()
+    sink._max_pending_bytes = 100
+    sink._pump = lambda: None
+    sound = SimpleNamespace(
+        ndarray=np.array([[1, 2], [3, 4], [99, 99], [88, 88]], dtype=np.int8),
+        raw_buffer_head=4,
+    )
+
+    sink.feed(SimpleNamespace(sound=sound))
+
+    assert sink._pending == bytearray([1, 2, 3, 4])

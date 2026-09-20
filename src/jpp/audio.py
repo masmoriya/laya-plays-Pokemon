@@ -10,13 +10,11 @@ import pygame
 LOGGER = logging.getLogger(__name__)
 AUDIO_SAMPLE_RATE = 48_000
 AUDIO_CHANNELS = 2
-AUDIO_BUFFER = 1_024
-AUDIO_CHUNK_SECONDS = 0.25
-# Start only after two complete clips are available behind the clip being played.
-# Without this cushion, the producer reaches the next chunk at the same time the
-# mixer finishes the current one, which creates a short underrun/click at every boundary.
-AUDIO_START_BUFFER_SECONDS = 0.75
-MAX_PENDING_SECONDS = 1.25
+AUDIO_BUFFER = 512
+AUDIO_CHUNK_SECONDS = 0.05
+# Keep one clip behind playback so a frame can arrive before the mixer needs it.
+AUDIO_START_BUFFER_SECONDS = 0.1
+MAX_PENDING_SECONDS = 0.15
 
 
 def pre_init(sample_rate: int = AUDIO_SAMPLE_RATE) -> None:
@@ -38,8 +36,8 @@ class AudioSink:
     """Buffer PyBoy samples and play them as a continuous mixer stream.
 
     PyBoy gives us roughly one 16 ms buffer per frame. Playing each one directly
-    leaves a scheduling gap at every boundary; larger chunks plus a prebuffer give
-    the mixer enough work to cross those boundaries cleanly.
+    leaves a scheduling gap at every boundary; a short prebuffer gives the mixer
+    time to queue the next clip while keeping input sounds close to the video.
     """
 
     def __init__(self, sample_rate: int = AUDIO_SAMPLE_RATE):
@@ -74,13 +72,18 @@ class AudioSink:
         if not self.enabled or not self._realtime:
             return
         try:
-            samples = emulator.sound.ndarray
+            sound = emulator.sound
+            # PyBoy's ndarray is backed by its full frame allocation. Its
+            # variable-length valid region is measured in interleaved bytes.
+            # Including the spare row inserts a click every frame; LCD changes
+            # can leave a much larger stale tail in the same allocation.
+            samples = sound.ndarray[: sound.raw_buffer_head // AUDIO_CHANNELS]
             if samples.size == 0:
                 return
             self._pending.extend(samples.tobytes())
             if len(self._pending) > self._max_pending_bytes:
-                # Fast-forward modes can produce samples faster than a real-time
-                # speaker can consume them. Drop whole stereo frames, never bytes.
+                # A long-running stall can produce more samples than the bounded
+                # cushion can retain. Drop whole stereo frames, never bytes.
                 excess = len(self._pending) - self._max_pending_bytes
                 del self._pending[: excess - (excess % AUDIO_CHANNELS)]
             self._pump()
