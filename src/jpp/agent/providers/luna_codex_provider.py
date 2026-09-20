@@ -26,14 +26,21 @@ class LunaCodexProvider:
         )
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or "codex exec failed")
-        for line in reversed(result.stdout.splitlines()):
+        usage = {}
+        value = None
+        for line in result.stdout.splitlines():
             try:
-                value = json.loads(line)
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(value, dict) and isinstance(value.get("action"), str):
-                return value
-        raise ValueError("Codex returned no JSON action")
+            usage.update(_usage(event))
+            if isinstance(event, dict) and isinstance(event.get("action"), str):
+                value = event
+        if value is None:
+            raise ValueError("Codex returned no JSON action")
+        value = dict(value)
+        value.update(usage)
+        return value
 
     def decide_tactical(self, state, options):
         answer = self._ask("pick one tactical action", {"state": state, "options": options})
@@ -57,3 +64,25 @@ class LunaCodexProvider:
             )[:180]
         except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
             return "Jev is resting while decision service recovers."
+
+
+def _usage(event):
+    if not isinstance(event, dict):
+        return {}
+    raw = event.get("usage") or event.get("response", {}).get("usage")
+    if not isinstance(raw, dict):
+        raw = event.get("item", {}).get("usage")
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for output, names in {
+        "input_tokens": ("input_tokens", "prompt_tokens"),
+        "output_tokens": ("output_tokens", "completion_tokens"),
+        "total_tokens": ("total_tokens",),
+        "actual_cost_usd": ("actual_cost_usd", "cost_usd"),
+    }.items():
+        for name in names:
+            if raw.get(name) is not None:
+                result[output] = raw[name]
+                break
+    return result

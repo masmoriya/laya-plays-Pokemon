@@ -49,6 +49,10 @@ class Decision:
     reason: str = ""
     latency_ms: float = 0.0
     input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    actual_cost_usd: float | None = None
+    request_made: bool = False
     model: str = MODEL
 
 
@@ -73,6 +77,15 @@ def questions_for(branch) -> dict:
             "instructions": FAINTS_INSTRUCTIONS,
         }
         questions["should_flee"] = {"type": "noul", "instructions": FLEE_INSTRUCTIONS}
+    elif branch.kind == "gold97_battle":
+        questions["party_at_risk"] = {
+            "type": "noul",
+            "instructions": (
+                "Given the current party HP and opponent shown in the state, is there "
+                "clear risk of losing the party if the battle continues? Judge the "
+                "current situation only, independently of the selected action."
+            ),
+        }
     return questions
 
 
@@ -224,12 +237,19 @@ class Policy:
             name: a["noul"] for name, a in answers.items() if a.get("type") == "noul"
         }
         usage = payload.get("usage") or {}
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens")) or 0
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens")) or 0
+        total_tokens = usage.get("total_tokens")
         common = dict(
             probabilities=probabilities,
             confidence=choice.get("confidence"),
             nouls=nouls,
             latency_ms=latency_ms,
-            input_tokens=usage.get("input_tokens") or 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens or input_tokens + output_tokens,
+            actual_cost_usd=usage.get("actual_cost_usd", usage.get("cost_usd")),
+            request_made=True,
             model=payload.get("model", self.client.model),
         )
         if option not in branch.options:

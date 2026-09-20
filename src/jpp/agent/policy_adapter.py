@@ -23,7 +23,15 @@ class ProviderPolicy:
             return Decision(
                 option=option,
                 reason=answer.get("commentary", ""),
+                probabilities=answer.get("probabilities", {}),
+                confidence=answer.get("confidence"),
+                nouls=answer.get("nouls", {}),
+                input_tokens=answer.get("input_tokens", 0),
+                output_tokens=answer.get("output_tokens", 0),
+                total_tokens=answer.get("total_tokens", 0),
+                actual_cost_usd=answer.get("actual_cost_usd", answer.get("cost_usd")),
                 latency_ms=round((time.monotonic() - started) * 1000, 1),
+                request_made=True,
                 model=getattr(self.provider, "model", "provider"),
             )
         except Exception as exc:
@@ -33,4 +41,3 @@ class ProviderPolicy:
                 reason=f"{type(exc).__name__}: {exc}; {reason}",
                 latency_ms=round((time.monotonic() - started) * 1000, 1),
             )
-

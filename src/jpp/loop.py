@@ -341,6 +341,9 @@ def _record(goal, branch: Branch, decision: Decision, driver: Driver, st) -> dic
         "fell_back": decision.fell_back,
         "latency_ms": decision.latency_ms,
         "input_tokens": decision.input_tokens,
+        "output_tokens": decision.output_tokens,
+        "total_tokens": decision.total_tokens,
+        "actual_cost_usd": decision.actual_cost_usd,
         "active_hp_fraction": st.battle.active.hp_fraction
         if st.battle.active
         else None,

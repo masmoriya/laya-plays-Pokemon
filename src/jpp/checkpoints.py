@@ -17,7 +17,7 @@ class CheckpointManager:
         path = self.directory / f"{run_id}-{stamp}-{_safe_component(reason)}.state"
         with path.open("wb") as handle:
             emulator.save_state(handle)
-        protected = {"snapshot", "before-restart", "manual"}
+        protected = {"snapshot", "before-restart", "manual", "encounter"}
         states = sorted(
             (item for item in self.directory.glob(f"{run_id}-*.state")
              if not any(item.stem.endswith(f"-{kind}") for kind in protected)),

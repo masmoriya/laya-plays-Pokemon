@@ -1,16 +1,28 @@
-"""Compatibility provider backed by existing closed-set policy."""
+"""Jev's typed, closed-set judgments for adapter-neutral play."""
+
+from types import SimpleNamespace
 
 from ...policy import Policy
 
 
 class JevProvider:
     def __init__(self, policy=None):
-        self.policy = policy or Policy(enabled=False)
+        self.policy = policy or Policy()
+        self.model = self.policy.client.model
 
     def decide_tactical(self, state, options):
-        # Existing loop still owns Branch -> button translation. This adapter exposes
-        # same intent shape for new orchestration code.
-        return {"action": next(iter(options), "wait"), "commentary": "Choosing legal action."}
+        branch = SimpleNamespace(kind=state.get("decision_kind", "generic"),
+                                 state=state, options=options)
+        decision = self.policy.decide(branch)
+        if decision.fell_back:
+            raise RuntimeError(decision.reason)
+        return {"action": decision.option, "probabilities": decision.probabilities,
+                "confidence": decision.confidence, "nouls": decision.nouls,
+                "input_tokens": decision.input_tokens,
+                "output_tokens": decision.output_tokens,
+                "total_tokens": decision.total_tokens,
+                "actual_cost_usd": decision.actual_cost_usd,
+                "commentary": ""}
 
     def decide_strategy(self, state, memory):
         return {"objective": state.get("objective", "Continue current route")}
@@ -20,4 +32,3 @@ class JevProvider:
 
     def generate_commentary(self, event):
         return event.get("commentary", "Jev is deciding.")
-

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from jpp.gold97_adapter import (
     BADGES,
     PARTY_COUNT,
@@ -20,6 +22,7 @@ from jpp.gold97_adapter import (
 )
 from jpp.gold97_data import NAME_WIDTH, Gold97RomData
 from jpp.progress import ProgressTracker
+from jpp.pokemon_sprites import PokemonSprites
 
 
 def _rom(tmp_path: Path) -> Path:
@@ -187,15 +190,28 @@ def test_adapter_reads_actual_trainer_identity_and_deduplicates_monotype(tmp_pat
     adapter = Gold97Adapter(_rom(tmp_path))
     memory = bytearray(0x10000)
     memory[BATTLE_MODE] = 2
-    memory[OTHER_TRAINER_CLASS] = 0x3B
+    memory[OTHER_TRAINER_CLASS] = 0x3C
     memory[OTHER_TRAINER_ID] = 1
     memory[BATTLE_MON] = 155
     memory[BATTLE_MON + 13] = 5
     memory[BATTLE_MON + 16:BATTLE_MON + 20] = b"\0\x14\0\x14"
     memory[BATTLE_MON + 30] = memory[BATTLE_MON + 31] = 21
     state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
-    assert state.opponent_label == "Pokéfan Colette"
+    assert state.opponent_label == "Trainer"  # synthetic ROM has no trainer roster
     assert state.battle.active.types == ("FIRE",)
+
+
+def test_reforged_rom_resolves_multiple_trainer_names():
+    rom = Path(__file__).resolve().parents[1] / "Gold 97 Reforged v6.1c.gbc"
+    if not rom.is_file():
+        pytest.skip("local Reforged cartridge unavailable")
+    data = Gold97RomData.from_path(rom)
+    assert data.trainer_name(0x36, 3) == "Sage Troy"
+    assert data.trainer_name(0x3C, 1) == "Pokéfan Colette"
+    assert "Because it dislikes fighting" in data.species_data(16).entry
+    portrait = PokemonSprites(rom).trainer_frame(0x36)
+    assert portrait is not None and portrait.get_size() == (56, 56)
+    assert portrait.get_at((0, 0)).a == 255
 
 
 def test_loading_another_timeline_drops_previous_party_fallback(tmp_path):

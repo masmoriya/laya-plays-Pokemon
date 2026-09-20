@@ -79,6 +79,7 @@ class Gold97State:
     map_height: int = 0
     battle_result: int | None = None
     opponent_label: str | None = None
+    opponent_trainer_class: int | None = None
 
     @property
     def in_battle(self) -> bool:
@@ -192,6 +193,7 @@ class Gold97Adapter:
             label, locality, width, height,
             mem[BATTLE_RESULT] if kind == "none" else None,
             self._opponent_label(mem, kind),
+            mem[OTHER_TRAINER_CLASS] if kind == "trainer" else None,
         )
         return SimpleNamespace(
             state=state, badge_update=None, title=self.title, supports_ram_progress=True

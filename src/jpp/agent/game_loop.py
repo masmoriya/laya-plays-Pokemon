@@ -90,8 +90,16 @@ def _advance(emulator, frames, on_frame, on_audio=None):
 
 
 def play(emulator, adapter, agent_policy, max_decisions, log_path=None,
-         on_decision=None, on_frame=None, on_audio=None):
+         on_decision=None, on_frame=None, on_audio=None, run_id="headless-gold97",
+         memory_state=None):
     """Run an adapter snapshot through a safe, game-neutral button policy."""
+    from ..gold97_adapter import Gold97Adapter
+
+    if isinstance(adapter, Gold97Adapter):
+        from .gold97_play import play_gold97
+        return play_gold97(emulator, adapter, agent_policy, max_decisions,
+                           log_path, on_decision, on_frame, on_audio,
+                           run_id=run_id, memory_state=memory_state)
     records = []
     log = Path(log_path).open("a") if log_path else None
     try:
@@ -117,6 +125,9 @@ def play(emulator, adapter, agent_policy, max_decisions, log_path=None,
                 "reason": decision.reason,
                 "latency_ms": decision.latency_ms,
                 "input_tokens": decision.input_tokens,
+                "output_tokens": decision.output_tokens,
+                "total_tokens": decision.total_tokens,
+                "actual_cost_usd": decision.actual_cost_usd,
                 "active_hp_fraction": None,
                 "active_slot": None,
                 "decision": index + 1,

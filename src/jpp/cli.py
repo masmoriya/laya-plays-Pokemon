@@ -148,6 +148,8 @@ def cmd_play(args):
                 on_decision=on_decision,
                 on_frame=on_frame,
                 on_audio=audio.feed if audio else None,
+                run_id=args.run_id,
+                memory_state=args.state,
             )
     finally:
         if audio:
@@ -261,6 +263,7 @@ def main(argv=None):
         help="the 1080x1350 window beside the game; slower on purpose, never the headline",
     )
     p.add_argument("--max-decisions", type=int, default=50)
+    p.add_argument("--run-id", default="headless-gold97", help="memory and checkpoint namespace")
     p.add_argument("--out")
     p.add_argument(
         "--replay", help="answer from recorded fixtures instead of the network"

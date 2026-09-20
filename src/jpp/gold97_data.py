@@ -17,7 +17,8 @@ _ANCHOR = bytes((0x81, 0x94, 0x8B, 0x81, 0x80, 0x92, 0x80, 0x94, 0x91, 0x50))
 _CHARS = {0x50: "@", 0x7F: " ", 0xE0: "'", 0xE3: "-", 0xE8: ".", 0xEF: "♂", 0xF5: "♀"}
 _CHARS.update({0x80 + i: chr(65 + i) for i in range(26)})
 _CHARS.update({0xA0 + i: chr(97 + i) for i in range(26)})
-_GAME_CHARS = {0x50: " ", 0x7F: " ", 0x4E: " ", 0xE8: ".", 0xEF: "♂", 0xF5: "♀"}
+_GAME_CHARS = {0x50: " ", 0x7F: " ", 0x4E: " ", 0xE3: "-", 0xE8: ".",
+               0xF4: ",", 0xEF: "♂", 0xF5: "♀"}
 _GAME_CHARS[0x54] = "Poké"
 _GAME_CHARS.update({0x80 + i: chr(65 + i) for i in range(26)})
 _GAME_CHARS.update({0xA0 + i: chr(97 + i) for i in range(26)})
@@ -54,7 +55,10 @@ class SpeciesData:
 
 
 def _game_text(raw: bytes) -> str:
-    return "".join(_GAME_CHARS.get(byte, "") for byte in raw).replace("  ", " ").strip()
+    # The cartridge hyphenates words at a line/page break. Join those syllables
+    # for the wider dashboard text while retaining ordinary hyphens.
+    raw = raw.replace(b"\xe3\x4e", b"").replace(b"\xe3\x50", b"")
+    return " ".join("".join(_GAME_CHARS.get(byte, "") for byte in raw).split())
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,7 @@ class Gold97RomData:
     def pokedex_ids(self, mem, address: int) -> tuple[int, ...]:
         return _flag_ids(mem, address, SPECIES_COUNT)
 
+    @lru_cache(maxsize=256)
     def trainer_name(self, trainer_class: int, trainer_id: int) -> str | None:
         """Resolve the current trainer from this ROM's class and party tables."""
         if not 1 <= trainer_class <= 100 or not 1 <= trainer_id <= 100:
@@ -131,6 +136,7 @@ class Gold97RomData:
         offset = self.rom.find(pointers)
         return offset if offset >= 0 and offset // 0x4000 == falkner // 0x4000 else None
 
+    @lru_cache(maxsize=100)
     def _trainer_class_name(self, trainer_class: int) -> str | None:
         leader = bytes((0x8B, 0x84, 0x80, 0x83, 0x84, 0x91, 0x50))
         anchor = self.rom.find(leader * 7)

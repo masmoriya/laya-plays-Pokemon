@@ -22,6 +22,10 @@ def _route():
 
 MAIN, OPTIONAL = _route()
 _BADGE_STEPS = {5: 1, 10: 2, 15: 3, 21: 4, 32: 5, 39: 6, 44: 7}
+# Gold 97's Brass Tower interior spans group 3, while the actual top is a
+# separate roof map. Reaching an interior floor is not proof of completing step 4.
+BRASS_TOWER_ROOF = (14, 10)
+_MAP_COMPLETIONS = {4: BRASS_TOWER_ROOF}
 _ARRIVALS = {
     1: "Silent Town", 3: "Pagota City",
     9: "Westport City", 17: "Birdon Town", 23: "Sunpoint City",
@@ -45,6 +49,10 @@ class RouteProgress:
         badges = len(getattr(state, "badge_ids", ()))
         for step, count in _BADGE_STEPS.items():
             if badges >= count:
+                self.completed.add(step)
+        map_key = (getattr(state, "map_group", None), getattr(state, "map_number", None))
+        for step, target in _MAP_COMPLETIONS.items():
+            if map_key == target:
                 self.completed.add(step)
         area = getattr(state, "area_name", "")
         for step, target in _ARRIVALS.items():
