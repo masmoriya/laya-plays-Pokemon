@@ -1,7 +1,10 @@
 import argparse
 from types import SimpleNamespace
 
+import pygame
+
 from jpp.live import SPEEDS, _adjust_speed, _press_held_buttons, add_parser
+from jpp.live_controls import handle_keydown
 from jpp.live_ui import format_duration, starter_name
 from jpp.progress import ProgressTracker
 
@@ -34,6 +37,13 @@ def test_speed_controls_walk_the_supported_steps_and_clamp():
     assert _adjust_speed(1.0, -1) == 0.5
     assert _adjust_speed(0.25, -1) == SPEEDS[0]
     assert _adjust_speed(4.0, 1) == SPEEDS[-1]
+
+
+def test_speed_key_only_changes_the_frame_pacer_setting(monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    emulator = FakeEmulator()  # no PyBoy throttle API should be called
+    speed = handle_keydown(SimpleNamespace(key=pygame.K_2), emulator, set(), lambda _: None, 1.0)
+    assert speed == 2.0
 
 
 def test_live_resumes_snapshots_by_default_and_can_start_fresh():

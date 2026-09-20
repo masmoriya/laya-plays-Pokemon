@@ -58,6 +58,32 @@ def test_timeline_page_controls_and_footer_do_not_overlap():
         pygame.quit()
 
 
+def test_timeline_header_includes_pokemon_caught_and_seen_counts():
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        rendered = []
+        original = ui.text
+
+        def record(value, pos, font=None, color=None, **kwargs):
+            rendered.append(str(value))
+            original(value, pos, font, color, **kwargs)
+
+        ui.text = record
+        ui.timeline.draw(SimpleNamespace(route=RouteProgress()), {
+            "badge_count": 0,
+            "pokedex_caught": 3,
+            "pokedex_seen": 14,
+        })
+
+        header = next(text for text in rendered if "stages" in text)
+        assert "Pokémon 3 caught" in header
+        assert "14 seen" in header
+    finally:
+        pygame.quit()
+
+
 def test_supplied_cartridge_contains_authentic_badges_and_leader_faces():
     cartridge = Path(__file__).resolve().parents[1] / "Gold 97 Reforged v6.1c.gbc"
     if not cartridge.is_file():

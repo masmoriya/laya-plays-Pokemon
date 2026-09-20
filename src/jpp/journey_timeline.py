@@ -67,7 +67,9 @@ class JourneyTimeline:
         ui.text(
             f"{len(completed)}/127 stages   ·   {progress.get('badge_count', 0)}/8 badges"
             f"   ·   {progress.get('battles', 0)} battles   ·   {progress.get('wins', 0)} wins"
-            f"   ·   {progress.get('losses', 0)} losses",
+            f"   ·   {progress.get('losses', 0)} losses"
+            f"   ·   Pokémon {progress.get('pokedex_caught', 0)} caught"
+            f"   ·   {progress.get('pokedex_seen', 0)} seen",
             (box.x + 110, box.y + 11), ui.small, MUTED)
         if start:
             ui.button("timeline_prev", "‹", pygame.Rect(box.x + 8, box.y + 58, 24, 28))

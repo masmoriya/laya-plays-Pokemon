@@ -11,13 +11,15 @@ from .character.character_state import CharacterState
 from .audio import AudioSink, pre_init as pre_init_audio
 from .game_adapter import adapter_for_rom
 from .gold97_adapter import Gold97Adapter
+from .frame_pacer import FramePacer
+from .agent.gold97_controller import Gold97Controller
 from .live_ui import SIZE, LiveUI
 from .battle_progress import BattleProgress
 from .journey import Journey
 from .pokemon_sprites import PokemonSprites
 from .journey_timeline import MILESTONES, VISIBLE, timeline_start
 from .progress import ProgressTracker
-from .terrain_capture import visible_background, visible_entities, visible_player
+from .terrain_capture import WorldCamera, visible_background, visible_entities, visible_player
 from .live_controls import handle_keydown
 from .live_cli import add_parser
 from .rules import GameRules
@@ -59,7 +61,7 @@ def run(
     pygame.display.set_caption("Jev Plays Games")
     checkpoints = CheckpointManager()
     emu = PyBoy(str(rom), window="null")
-    emu.set_emulation_speed(speed)
+    emu.set_emulation_speed(0)
     state_path = Path(state) if state else None
     if state_path is None and resume and not native_save:
         state_path = checkpoints.latest(run_id)
@@ -70,6 +72,7 @@ def run(
     if state_path:
         _load_state(emu, state_path)
     audio = AudioSink(getattr(emu.sound, "sample_rate", 48_000))
+    audio.set_speed(speed)
     store = RunStore(run_id=run_id)
     journey = Journey(run_id)
     if state_path and not journey.restore_checkpoint(state_path):
@@ -94,6 +97,8 @@ def run(
     adapter = adapter_for_rom(
         rom, getattr(emu, "cartridge_title", None), forced=game_adapter
     )
+    autonomous = False
+    controller = None
     tracker = ProgressTracker(
         run_id,
         # ``started_at`` in the run store is historical telemetry. The HUD clock is
@@ -108,10 +113,12 @@ def run(
     battles = BattleProgress(tracker.progress.battles, tracker.progress.wins, tracker.progress.losses)
     store.emit(Event(EventType.RUN_STARTED, run_id, {"mode": "human", **rules.public_context()}))
     animation = Animation()
+    pacer = FramePacer()
     last_save = time.monotonic()
     held_buttons = set()
     pokemon_sprites = PokemonSprites(rom) if isinstance(adapter, Gold97Adapter) else None
     ui = LiveUI(screen, pokemon_sprites)
+    camera = WorldCamera()
     thoughts = {"jev": [], "luna": []}
 
     def add_thought(source, message):
@@ -123,11 +130,14 @@ def run(
             del entries[:-8]
 
     skip_exit_checkpoint = False
-    last_position = None
-    frames_at_position = 0
+    def save_agent(reason):
+        path = _save(emu, checkpoints, tracker, reason, store, journey)
+        if controller:
+            controller.memory.checkpoint(path)
+        return path
 
     def restore_latest():
-        nonlocal last_save, battles, last_position
+        nonlocal last_save, battles
         restored = checkpoints.latest(run_id)
         if restored is None:
             add_thought("jev", "No snapshot to restore yet.")
@@ -139,9 +149,14 @@ def run(
             return
         if isinstance(adapter, Gold97Adapter):
             adapter.reset_transition()
+            camera.reset()
         ui.timeline.player = None
         if not journey.restore_checkpoint(restored):
             journey.reset_view()
+        if controller:
+            if not controller.memory.restore(restored):
+                controller.memory.reset()
+            controller.resume()
         metadata = store.checkpoint_metadata(restored) or {}
         for field in ("battles", "wins", "losses", "saves"):
             setattr(tracker.progress, field, max(
@@ -149,48 +164,60 @@ def run(
             ))
         tracker.progress.map_history = list(metadata.get("map_history", ()))
         last_save = time.monotonic()
-        last_position = None
-        audio.close()
+        audio.flush()
+        pacer.reset()
         battles = BattleProgress(tracker.progress.battles, tracker.progress.wins, tracker.progress.losses)
         add_thought("jev", "Snapshot restored.")
 
     def action(name):
-        nonlocal emu, audio, last_save, skip_exit_checkpoint, battles, last_position
+        nonlocal emu, audio, last_save, skip_exit_checkpoint, battles
+        nonlocal autonomous, controller
         if name == "snapshot":
-            _save(emu, checkpoints, tracker, "snapshot", store, journey)
+            save_agent("snapshot")
             last_save = time.monotonic()
             add_thought("jev", "Snapshot saved.")
         elif name == "restore":
             restore_latest()
         elif name == "restart":
             # Preserve the return point before reboot. Never remove the cartridge RAM.
-            _save(emu, checkpoints, tracker, "before-restart", store, journey)
+            save_agent("before-restart")
             audio.close()
             emu.stop(save=True)
             emu = PyBoy(str(rom), window="null")
+            emu.set_emulation_speed(0)
+            pacer.reset()
+            camera.reset()
             if isinstance(adapter, Gold97Adapter):
                 adapter.reset_transition()
             ui.timeline.player = None
-            emu.set_emulation_speed(speed)
             audio = AudioSink(getattr(emu.sound, "sample_rate", 48_000))
             audio.set_muted(ui.audio_muted)
+            audio.set_speed(speed)
             battles = BattleProgress(tracker.progress.battles, tracker.progress.wins, tracker.progress.losses)
             last_save = time.monotonic()
-            last_position = None
             skip_exit_checkpoint = True
             add_thought("jev", "Restarted to title. Snapshot kept.")
         elif name == "game_save":
             add_thought("jev", "Use Start → Save in game. Your game save persists on quit.")
+        elif name == "toggle_jev" and isinstance(adapter, Gold97Adapter):
+            if controller is None:
+                controller = Gold97Controller(
+                    run_id, save_encounter=lambda: save_agent("encounter"),
+                    restore_encounter=restore_encounter)
+                if state_path:
+                    if not controller.memory.restore(state_path):
+                        controller.memory.reset()
+            autonomous = not autonomous
+            if autonomous:
+                controller.resume()
+            else:
+                add_thought("jev", "Paused.")
         elif name == "shortcuts":
             ui.show_shortcuts = not ui.show_shortcuts
         elif name == "toggle_audio":
             ui.audio_muted = audio.toggle_mute()
-        elif name == "map_toggle":
-            ui.map_mode = "paths" if ui.map_mode == "terrain" else "terrain"
         elif name == "map_details":
             ui.map_details = not ui.map_details
-        elif name == "map_expand":
-            ui.map_expanded = not ui.map_expanded
         elif name == "confirm_stage":
             if journey.route.confirm() is not None:
                 journey.save_route()
@@ -205,6 +232,14 @@ def run(
         elif name == "timeline_next":
             ui.timeline.page = min(len(MILESTONES) - VISIBLE,
                                    timeline_start(journey.route.completed, ui.timeline.page) + 8)
+    def restore_encounter(path):
+        _load_state(emu, path)
+        adapter.reset_transition()
+        camera.reset()
+        pacer.reset()
+        audio.flush()
+        journey.restore_checkpoint(path)
+
     try:
         while True:
             for event in pygame.event.get():
@@ -212,25 +247,27 @@ def run(
                     return
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        if ui.map_expanded:
-                            ui.map_expanded = False
-                            continue
                         return
                     previous_speed = speed
                     speed = handle_keydown(event, emu, held_buttons, action, speed)
                     if previous_speed != speed:
-                        audio.close()
+                        audio.set_speed(speed)
+                        pacer.reset()
                 if event.type == pygame.KEYUP and event.key in DIRECTION_KEYS:
                     held_buttons.discard(KEYS[event.key])
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     selected = ui.action_at(event.pos)
                     if selected:
                         action(selected)
+            if held_buttons and autonomous:
+                autonomous = False
+                add_thought("jev", "Paused for manual control.")
             _press_held_buttons(emu, held_buttons)
             emu.tick()
             audio.feed(emu)
             snapshot = adapter.snapshot(emu)
             state = snapshot.state
+            world_origin = camera.position(emu, state) if isinstance(adapter, Gold97Adapter) else None
             update = snapshot.badge_update
             journey.observe_route(state)
             outcome = battles.update(state)
@@ -244,8 +281,10 @@ def run(
             progress["game_title"] = snapshot.title
             progress["player_name"] = rules.player_name
             progress["speed"] = speed
-            progress["jev_connected"] = False
-            progress["luna_connected"] = False
+            progress["jev_connected"] = bool(autonomous and controller and not controller.paused)
+            progress["luna_connected"] = bool(controller and controller.vision_future)
+            progress["jev_auto"] = autonomous
+            progress["jev_available"] = isinstance(adapter, Gold97Adapter)
             if not snapshot.supports_ram_progress:
                 progress["current_map"] = f"{snapshot.title} · RAM map pending"
             animation.state = CharacterState.BATTLE if state.in_battle else CharacterState.IDLE
@@ -253,35 +292,60 @@ def run(
                 progress["badge_flash"] = update.new_badge_event
                 animation.state = CharacterState.CELEBRATE
                 add_thought("jev", f"Badge earned: {update.new_badge_event}")
-                _save(emu, checkpoints, tracker, "badge", store, journey)
+                save_agent("badge")
                 store.emit(Event(EventType.BADGE_EARNED, run_id, {"badge": update.new_badge_event}))
             if not skip_exit_checkpoint and time.monotonic() - last_save > CHECKPOINT_INTERVAL_SECONDS:
-                _save(emu, checkpoints, tracker, "interval", store, journey)
+                save_agent("interval")
                 last_save = time.monotonic()
-            position = (getattr(state, "map_name", None), getattr(state, "x", None), getattr(state, "y", None))
-            frames_at_position = frames_at_position + 1 if position == last_position else 0
-            if position != last_position:
-                last_position = position
-                journey._last_sample = None
-            if frames_at_position >= 3 and frames_at_position % 15 == 3 and isinstance(adapter, Gold97Adapter):
-                observed = visible_background(emu, state)
+            map_key = f"{state.map_group:02X}:{state.map_number:02X}"
+            if (world_origin is not None
+                    and (map_key, state.x, state.y) != journey._last_sample):
+                observed = visible_background(emu, state, world_origin=world_origin)
                 journey.observe_tiles(state, observed)
                 # WRAM can retain the old area while the title/menu is open. Only
                 # resume automatic snapshots after an actual overworld frame.
                 if skip_exit_checkpoint and observed:
                     skip_exit_checkpoint = False
             frame = emu.screen.ndarray
-            ui.map_entities = visible_entities(emu, state) if isinstance(adapter, Gold97Adapter) else ()
-            ui.player_pixels = visible_player(emu, state) if isinstance(adapter, Gold97Adapter) else None
+            if world_origin is not None:
+                detections = visible_entities(emu, state, world_origin=world_origin)
+                ui.map_entities = journey.track_entities(state, detections)
+            elif not isinstance(adapter, Gold97Adapter):
+                ui.map_entities = ()
+            if isinstance(adapter, Gold97Adapter):
+                if autonomous and controller:
+                    choice = controller.step(
+                        state, frame=frame, entities=ui.map_entities,
+                        overworld=world_origin is not None)
+                    if choice:
+                        emu.button(choice, 4)
+                    if controller.paused:
+                        autonomous = False
+                        add_thought("jev", controller.pause_reason)
+            progress["model_usage"] = (controller.usage_snapshot()
+                                        if controller else {"jev": {}, "luna": {}})
+            player = (visible_player(emu, state, world_origin=world_origin)
+                      if world_origin is not None else None)
+            if player:
+                ui.player_marker = player
+            elif (ui.player_marker and getattr(state, "x", None) is not None
+                  and getattr(state, "y", None) is not None
+                  and ui.player_marker.map_key == f"{state.map_group:02X}:{state.map_number:02X}"):
+                pass  # retain the last captured graphic through menus and partial frames
+            else:
+                ui.player_marker = None
             ui.draw(frame, progress, state, animation, thoughts, journey, battles)
+            pacer.wait(speed)
     finally:
         try:
             if not skip_exit_checkpoint:
-                _save(emu, checkpoints, tracker, "exit", store, journey)
+                save_agent("exit")
         finally:
             try:
                 audio.close()
             finally:
+                if controller:
+                    controller.close()
                 emu.stop(save=True)
                 tracker.progress.seal_active_time()
                 store.set_stats(**tracker.progress.to_dict())
@@ -301,6 +365,7 @@ def _save(emu, checkpoints, tracker, reason, store=None, journey=None):
     if journey:
         journey.record_checkpoint(path)
     print(f"checkpoint saved: {path}")
+    return path
 
 
 def _load_state(emu, path):

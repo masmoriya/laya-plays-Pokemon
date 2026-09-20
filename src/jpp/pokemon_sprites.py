@@ -9,6 +9,7 @@ from .gold97_data import Gold97RomData
 
 
 PIC_POINTERS = 0x48 * 0x4000  # Gold 97 pokecrystal.link: Pic Pointers at $48:4000
+TRAINER_PIC_POINTERS = 0x4A * 0x4000  # Reforged trainer pointer table
 PICS_FIX = 0x36
 _FLIP = bytes(int(f"{i:08b}"[::-1], 2) for i in range(256))
 
@@ -97,6 +98,20 @@ def _palette(rom, offset, identifier):
     return tuple(tuple(component * 255 // 31 for component in rgb) + (255,) for rgb in colors)
 
 
+def _trainer_palette(rom, offset, trainer_class):
+    if offset < 0:
+        return None
+    start = offset + (trainer_class - 1) * 4
+    if start + 4 > len(rom):
+        return None
+    colors = []
+    for pos in (start, start + 2):
+        value = int.from_bytes(rom[pos:pos + 2], "little")
+        rgb = (value & 31, (value >> 5) & 31, (value >> 10) & 31)
+        colors.append(tuple(component * 255 // 31 for component in rgb) + (255,))
+    return tuple(colors)
+
+
 def _surface(two_bpp, dimension, middle_colors=None):
     needed = dimension * dimension * 16
     if len(two_bpp) < needed:
@@ -123,6 +138,7 @@ class PokemonSprites:
         self.ids = {name.upper(): i for i, name in enumerate(self.names) if i}
         self.dimensions = _front_dimensions(self.rom)
         self.palettes = _palette_offset(self.rom)
+        self.trainer_palettes = self.rom.find(bytes.fromhex("3b3aa77c5c26f508"))
         self.cache = Path(cache_root) / hashlib.sha256(self.rom).hexdigest()[:16]
         self.frames = {}
 
@@ -136,6 +152,27 @@ class PokemonSprites:
         if not frames:
             return None
         return frames[(pygame.time.get_ticks() // 360) % len(frames)]
+
+    def trainer_frame(self, trainer_class):
+        if not isinstance(trainer_class, int) or not 1 <= trainer_class <= 68:
+            return None
+        key = ("trainer", trainer_class)
+        if key not in self.frames:
+            self.frames[key] = self._load_trainer(trainer_class)
+        return self.frames[key][0] if self.frames[key] else None
+
+    def _load_trainer(self, trainer_class):
+        pointer = TRAINER_PIC_POINTERS + (trainer_class - 1) * 3
+        if pointer + 3 > len(self.rom):
+            return ()
+        bank = self.rom[pointer] + PICS_FIX
+        address = int.from_bytes(self.rom[pointer + 1:pointer + 3], "little")
+        start = bank * 0x4000 + address - 0x4000
+        if not 0x4000 <= address < 0x8000 or start >= len(self.rom):
+            return ()
+        raw = decompress_lz(self.rom, start)
+        surface = _surface(raw, 7, _trainer_palette(self.rom, self.trainer_palettes, trainer_class))
+        return (surface,) if surface is not None else ()
 
     def _load(self, identifier):
         cached = self.cache / f"{identifier:03}-color-v3.png"

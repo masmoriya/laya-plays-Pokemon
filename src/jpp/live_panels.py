@@ -99,36 +99,64 @@ class LivePanels:
         opponent = getattr(getattr(state, "battle", None), "opponent", None)
         own = getattr(getattr(state, "battle", None), "active", None)
         label = getattr(state, "opponent_label", None)
+        trainer_class = getattr(state, "opponent_trainer_class", None)
         if own is None and label and label != "Wild":
-            self._trainer_intro(label)
+            self._trainer_intro(label, trainer_class)
         else:
-            self._opponent_entry(opponent, label)
+            self._opponent_entry(opponent, label, trainer_class)
         self._active_battle_mon(own)
         self._current_stage(journey)
 
-    def _trainer_intro(self, label):
+    def _trainer_intro(self, label, trainer_class):
         box = pygame.Rect(994, 176, 422, 382)
         self._panel(box, "Trainer battle")
-        self.ui.text(label, (box.x + 14, box.y + 52), self.ui.body_bold, TEXT, max_width=394)
-        self.ui.text("Preparing their first Pokémon…", (box.x + 14, box.y + 80), self.ui.small, MUTED)
+        self._trainer_sprite(trainer_class, pygame.Rect(box.x + 14, box.y + 48, 108, 108))
+        self.ui.text(label, (box.x + 134, box.y + 52), self.ui.body_bold, TEXT, max_width=272)
+        self.ui.text("Preparing their first Pokémon…", (box.x + 134, box.y + 80), self.ui.small, MUTED,
+                     max_width=272)
 
-    def _opponent_entry(self, mon, label):
+    def _trainer_sprite(self, trainer_class, target):
+        provider = self.ui.pokemon_sprites
+        sprite = provider.trainer_frame(trainer_class) if provider and hasattr(provider, "trainer_frame") else None
+        if sprite is not None:
+            scaled = pygame.transform.scale(sprite, target.size)
+            self.ui.canvas.blit(scaled, target)
+        return sprite is not None
+
+    def _opponent_entry(self, mon, label, trainer_class=None):
         box = pygame.Rect(994, 176, 422, 382)
         self._panel(box, "Pokédex")
         if mon is None:
             self.ui.text("Opponent data unavailable", (box.x + 14, box.y + 54), self.ui.small, MUTED)
             return
         sprite = self.ui.pokemon_sprites.frame(mon.species) if self.ui.pokemon_sprites else None
-        icon = pygame.Rect(box.x + 14, box.y + 42, 116, 116)
+        has_trainer = trainer_class is not None
+        icon = pygame.Rect(box.x + 14, box.y + 42, 98 if has_trainer else 116,
+                           98 if has_trainer else 116)
         if sprite is not None:
-            scaled = pygame.transform.scale(sprite, (108, 108))
+            side = 94 if has_trainer else 108
+            scaled = pygame.transform.scale(sprite, (side, side))
             self.ui.canvas.blit(scaled, scaled.get_rect(center=icon.center))
-        self.ui.text(f"{label + ' · ' if label else ''}{mon.species}", (box.x + 140, box.y + 43), self.ui.body_bold, TEXT, max_width=264)
+        if has_trainer:
+            self._trainer_sprite(trainer_class, pygame.Rect(box.x + 112, box.y + 46, 88, 88))
+            text_x, text_width = box.x + 210, 196
+            self.ui.text(label or "Trainer", (text_x, box.y + 43), self.ui.small_bold, TEXT,
+                         max_width=text_width)
+            self.ui.text(mon.species, (text_x, box.y + 67), self.ui.body_bold, TEXT,
+                         max_width=text_width)
+        else:
+            text_x, text_width = box.x + 140, 264
+            self.ui.text(f"{label + ' · ' if label else ''}{mon.species}",
+                         (text_x, box.y + 43), self.ui.body_bold, TEXT, max_width=text_width)
         hp, max_hp = getattr(mon, "hp", "?"), getattr(mon, "max_hp", "?")
-        self.ui.text(f"Lv {mon.level}  ·  HP {hp}/{max_hp}", (box.x + 140, box.y + 68), self.ui.small, TEXT)
+        self.ui.text(f"Lv {mon.level}  ·  HP {hp}/{max_hp}",
+                     (text_x, box.y + (91 if has_trainer else 68)), self.ui.small, TEXT,
+                     max_width=text_width)
         status = getattr(mon, "status", "unknown")
         types = getattr(mon, "types", ())
-        self.ui.text(f"Status · {str(status).title()}  ·  {', '.join(types) or 'Unavailable'}", (box.x + 140, box.y + 91), self.ui.tiny, MUTED, max_width=264)
+        self.ui.text(f"Status · {str(status).title()}  ·  {', '.join(types) or 'Unavailable'}",
+                     (text_x, box.y + (113 if has_trainer else 91)), self.ui.tiny, MUTED,
+                     max_width=text_width)
         facts = getattr(mon, "species_data", None)
         if facts and facts.base_stats:
             labels = ("HP", "Atk", "Def", "Spd", "SpA", "SpD")
@@ -157,7 +185,16 @@ class LivePanels:
         hp, max_hp = getattr(mon, "hp", "?"), getattr(mon, "max_hp", "?")
         self.ui.text(f"HP {hp}/{max_hp}  ·  {', '.join(getattr(mon, 'types', ())) or 'Unavailable'}",
                      (box.x + 14, box.y + 65), self.ui.small, MUTED)
-        self._moves(box, mon.moves, mon.pp, box.y + 98, self.ui.small)
+        facts = getattr(mon, "species_data", None)
+        if facts and facts.base_stats:
+            labels = ("HP", "Atk", "Def", "Spd", "SpA", "SpD")
+            values = "  ".join(f"{name} {value}" for name, value in zip(labels, facts.base_stats))
+            self.ui.text("Species stats", (box.x + 14, box.y + 84), self.ui.tiny, MUTED)
+            self.ui.text(values, (box.x + 14, box.y + 99), self.ui.tiny, TEXT, max_width=394)
+            moves_top = box.y + 115
+        else:
+            moves_top = box.y + 98
+        self._moves(box, mon.moves, mon.pp, moves_top, self.ui.small)
 
     def _moves(self, box, moves, pp_values, top, font):
         for index, move in enumerate(moves[:4]):

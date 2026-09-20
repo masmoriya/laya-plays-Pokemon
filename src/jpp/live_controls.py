@@ -8,7 +8,8 @@ KEYS = {pygame.K_UP: "up", pygame.K_DOWN: "down", pygame.K_LEFT: "left",
         pygame.K_RETURN: "start", pygame.K_RSHIFT: "select"}
 DIRECTION_KEYS = frozenset((pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT))
 SPEEDS = (0.25, 0.5, 1.0, 2.0, 3.0, 4.0)
-UI_KEYS = {pygame.K_F1: "shortcuts", pygame.K_m: "map_toggle",
+UI_KEYS = {pygame.K_F1: "shortcuts",
+           pygame.K_F2: "toggle_jev",
            pygame.K_c: "confirm_stage", pygame.K_u: "undo_stage",
            pygame.K_o: "toggle_optional", pygame.K_v: "toggle_audio"}
 
@@ -41,5 +42,4 @@ def handle_keydown(event, emulator, held_buttons, action, speed):
         speed = 1.0
     elif key == pygame.K_2:
         speed = 2.0
-    emulator.set_emulation_speed(speed)
     return speed

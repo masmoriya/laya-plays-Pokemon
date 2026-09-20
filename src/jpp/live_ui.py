@@ -29,6 +29,11 @@ def starter_name(progress):
     return species if species and not str(species).startswith("MON_") else None
 
 
+def format_tokens(value):
+    value = int(value or 0)
+    return f"{value:,}"
+
+
 class LiveUI:
     def __init__(self, screen, pokemon_sprites=None):
         self.screen = screen
@@ -42,13 +47,11 @@ class LiveUI:
         self.jev_sprites = JevSprites()
         self.pokemon_sprites = pokemon_sprites
         self.timeline = JourneyTimeline(self, JourneyArt(getattr(pokemon_sprites, "rom", None)))
-        self.player_pixels = None
+        self.player_marker = None
         self.panels = LivePanels(self)
         self.show_shortcuts = False
         self.audio_muted = False
-        self.map_mode = "terrain"
         self.map_details = False
-        self.map_expanded = False
         self.map_entities = ()
         self.actions = {}
         self.selected_optional = None
@@ -57,8 +60,8 @@ class LiveUI:
     def draw(self, frame, progress, state, animation, thoughts, journey=None, battle=None):
         self.canvas.fill(BG)
         self.actions.clear()
-        if self.player_pixels:
-            self.timeline.player = pygame.image.frombuffer(self.player_pixels, (16, 16), "RGBA").copy()
+        if self.player_marker:
+            self.timeline.player = pygame.image.frombuffer(self.player_marker.rgba, (16, 16), "RGBA").copy()
         self.timeline.draw(journey, progress)
         self._game(frame)
         self._thoughts(thoughts, animation, progress)
@@ -69,9 +72,6 @@ class LiveUI:
             self.panels.map(state, journey)
             self.panels.stages(journey)
         self._footer(progress, thoughts)
-        if self.map_expanded:
-            self.actions.clear()
-            self.panels.map_panel.draw(state, journey, expanded=True)
         if self.show_shortcuts:
             self._shortcuts()
         width, height = self.screen.get_size()
@@ -137,14 +137,42 @@ class LiveUI:
         self.text("Live" if progress.get("luna_connected") else "Not connected",
                   (LEFT.x + 75, LEFT.y + 46), self.small,
                   GOOD if progress.get("luna_connected") else MUTED)
-        self._entries(thoughts.get("luna"), LEFT.y + 82, LEFT.y + 175)
+        self._usage(progress.get("model_usage"))
+        self._entries(thoughts.get("luna"), LEFT.y + 194, LEFT.y + 290)
         # Snapshot confirmation belongs with the snapshot controls, not the Jev feed.
         jev_entries = [entry for entry in (thoughts.get("jev") or [])
                        if entry != "Snapshot saved."]
-        self._entries(jev_entries, LEFT.y + 194, LEFT.bottom - 138)
+        self._entries(jev_entries, LEFT.y + 310, LEFT.bottom - 138)
         # Her avatar belongs to its own dock; it never steals commentary width.
         self.jev_sprites.draw(self.canvas, getattr(animation.state, "value", "idle"),
                               animation.frame(), pygame.Rect(LEFT.right - 104, LEFT.bottom - 124, 88, 108))
+
+    def _usage(self, model_usage):
+        self.text("Usage", (LEFT.x + 14, LEFT.y + 78), self.tiny, MUTED)
+        for index, (name, color) in enumerate((("jev", GOOD), ("luna", ACCENT))):
+            stats = (model_usage or {}).get(name) or {}
+            top = LEFT.y + 96 + index * 48
+            calls = stats.get("calls", 0)
+            self.text(f"{name.title()} {calls} calls · "
+                      f"{format_tokens(stats.get('input_tokens'))} in / "
+                      f"{format_tokens(stats.get('output_tokens'))} out",
+                      (LEFT.x + 14, top), self.tiny, color, max_width=LEFT.width - 28)
+            total_rate = stats.get("tokens_per_second")
+            input_rate = stats.get("input_tokens_per_second")
+            output_rate = stats.get("output_tokens_per_second")
+            rate = "—" if total_rate is None else f"{total_rate:g} tok/s"
+            if input_rate is not None and output_rate is not None:
+                rate += f" ({input_rate:g}/{output_rate:g})"
+            actual = stats.get("actual_cost_usd")
+            estimate = stats.get("estimated_cost_usd")
+            if actual is not None:
+                cost = f"${actual:.6f} actual"
+            elif estimate is not None:
+                cost = f"${estimate:.6f} est"
+            else:
+                cost = "cost —"
+            self.text(f"      {rate} · {cost}", (LEFT.x + 14, top + 18),
+                      self.tiny, MUTED, max_width=LEFT.width - 28)
 
     def _entries(self, entries, top, bottom):
         lines = []
@@ -161,6 +189,9 @@ class LiveUI:
                     ("restart", "Restart", 266, 76),
                     ("game_save", "Save help", 350, 84),
                     ("toggle_audio", "Unmute" if self.audio_muted else "Mute", 442, 72))
+        if progress.get("jev_available"):
+            controls += (("toggle_jev", "Pause Jev" if progress.get("jev_auto") else "Play Jev",
+                          910, 94),)
         for action, label, x, width in controls:
             self.button(action, label, pygame.Rect(x, 1026, width, 30),
                         ACCENT if action == "snapshot" else TEXT)
@@ -178,7 +209,7 @@ class LiveUI:
         pygame.draw.rect(self.canvas, BG, box, border_radius=6)
         lines = ("Keyboard", "Arrows move     Z A     X B     Enter Start     Shift Select",
                  "Ctrl-S snapshot     Ctrl-R restore     F1 close",
-                 "V mute audio     M map view     C confirm stage     U undo stage     O side stop",
+                 "V mute audio     C confirm stage     U undo stage     O side stop",
                  "- / + speed     0 reset speed     Esc quit")
         for index, line in enumerate(lines):
             self.text(line, (box.x + 18, box.y + 16 + index * 32),

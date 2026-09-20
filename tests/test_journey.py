@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 from jpp.gold97_catalog import map_details
 from jpp.journey import Journey
-from jpp.route_progress import MAIN, OPTIONAL, RouteProgress
+from jpp.route_progress import BRASS_TOWER_ROOF, MAIN, OPTIONAL, RouteProgress
+from jpp.terrain_capture import OverworldSprite
 
 
 def _state(*, battle=False, area="Silent Town"):
@@ -13,6 +14,10 @@ def _state(*, battle=False, area="Silent Town"):
 
 def _tile(x=1, y=1):
     return (x, y, 42, bytes([127] * 256))
+
+
+def _entity(x=32, y=40, key="npc:v2:32:40"):
+    return OverworldSprite(key, "15:03", x, y, bytes([127] * 1024))
 
 
 def test_route_contains_main_and_optional_stages_without_guessing_bosses():
@@ -51,6 +56,25 @@ def test_pagota_arrival_advances_journey_without_confirmation_and_persists(tmp_p
     resumed.close()
 
 
+def test_brass_tower_floors_do_not_complete_climb_stage():
+    route = RouteProgress(completed={1, 2, 3})
+    for map_number in (1, 5):
+        route.observe(SimpleNamespace(map_group=3, map_number=map_number,
+                                      area_name=f"Brass Tower {map_number}F",
+                                      badge_ids=()))
+        assert route.now == 4
+        assert 4 not in route.completed
+
+
+def test_brass_tower_roof_completes_climb_stage():
+    route = RouteProgress(completed={1, 2, 3})
+    route.observe(SimpleNamespace(map_group=BRASS_TOWER_ROOF[0],
+                                  map_number=BRASS_TOWER_ROOF[1],
+                                  area_name="Brass Tower Roof", badge_ids=()))
+    assert 4 in route.completed
+    assert route.now == 5
+
+
 def test_observations_persist_and_rewind_with_checkpoint_without_losing_archive(tmp_path):
     path = tmp_path / "run.sqlite"
     journey = Journey("run", path)
@@ -83,6 +107,49 @@ def test_invalid_or_unknown_map_samples_never_write(tmp_path):
     assert journey.observe_tiles(state, [(-1, 2, 1, bytes(256)),
                                          (1, 1, 1, b"bad")]) == 0
     assert journey.tiles["15:03"] == {}
+    journey.close()
+
+
+def test_entity_memories_persist_and_rewind_with_checkpoints(tmp_path):
+    path = tmp_path / "run.sqlite"
+    journey = Journey("run", path)
+    assert journey.observe_entities(_state(), [_entity()]) == 1
+    assert journey.observe_entities(_state(battle=True), [_entity(64, 72)]) == 0
+    journey.record_checkpoint("first.state")
+    assert journey.observe_entities(_state(), [_entity(64, 72)]) == 1
+    journey.close()
+
+    resumed = Journey("run", path)
+    assert resumed.entities["15:03"]["npc:v2:32:40"][:2] == (64, 72)
+    assert resumed.restore_checkpoint("first.state")
+    assert resumed.entities["15:03"]["npc:v2:32:40"][:2] == (32, 40)
+    resumed.close()
+
+
+def test_old_offset_ghosts_do_not_survive_reload(tmp_path):
+    path = tmp_path / "run.sqlite"
+    journey = Journey("run", path)
+    journey.observe_entities(_state(), [_entity(key="npc:32:40")])
+    journey.close()
+
+    resumed = Journey("run", path)
+    assert resumed.entities == {}
+    current = resumed.track_entities(_state(), [_entity(key="oam:4")])
+    assert current[0].key.startswith("npc:v2:")
+    assert len(resumed.entities["15:03"]) == 1
+    resumed.close()
+
+
+def test_npc_identity_survives_oam_reordering_and_partial_frames(tmp_path):
+    journey = Journey("run", tmp_path / "run.sqlite")
+    first = _entity(80, 64, key="oam:8")
+    tracked = journey.track_entities(_state(), [first])
+    assert tracked[0].key.startswith("npc:v2:")
+    partial = OverworldSprite("oam:12", "15:03", 80, 64, bytes(1024), parts=2)
+    tracked_again = journey.track_entities(_state(), [partial])
+    assert tracked_again[0].key == tracked[0].key
+    assert tracked_again[0].rgba == first.rgba
+    assert len(journey.entities["15:03"]) == 1
     journey.close()
 
 
