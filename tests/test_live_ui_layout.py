@@ -137,7 +137,7 @@ def test_map_location_border_follows_captured_sprite():
         assert source == pygame.Rect(0, 0, 640, 480)
         ui.canvas.fill((0, 0, 0))
         panel._area(state, SimpleNamespace(tiles={}, tile_revision=0), pygame.Rect(0, 0, 400, 300))
-        assert ui.canvas.get_at((162, 64))[:3] == (245, 223, 144)
+        assert ui.canvas.get_at((158, 60))[:3] == (236, 157, 111)
     finally:
         pygame.quit()
 
