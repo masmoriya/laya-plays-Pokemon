@@ -177,11 +177,28 @@ neutral button controller for Gold Reforged and other supported cartridges:
 ```
 AGENT_PROVIDER=fake uv run jpp play --rom /path/to/your/red.gb --headless
 AGENT_PROVIDER=luna_codex CODEX_MODEL=gpt-5.6-luna uv run jpp play --provider luna_codex --rom /path/to/your/red.gb --headless
-AGENT_PROVIDER=luna_codex uv run jpp play --provider luna_codex --rom "/path/to/Gold 97 Reforged v6.1c.gbc" --headless
+TYPESAFE_API_KEY=... uv run jpp play --provider jev --rom '/path/to/Gold 97 Reforged v6.1c.gbc' --headless
 ```
 
 Sign into Codex once with `codex`; `luna_codex` calls the supported Codex CLI and falls
 back to a safe legal action if CLI access is unavailable. It never reads browser tokens.
+
+Gold 97 Reforged now uses a Jev-led controller for headless `play`. In the local `live`
+window, press F2 or use Play Jev to opt in; F2, Pause Jev, or holding a movement key
+returns to manual control. The controller sends cartridge-derived text to Jev and only
+asks Luna to describe a screen when the game is in a menu/battle or repeated movement
+cannot be explained by the observed map. If either model is unavailable or an unknown
+screen cannot be verified, autonomous play pauses. The agent does not receive the
+prewritten story route. It remembers explored coordinates, failed steps, exits, and
+short factual clues per run; restoring a checkpoint restores that memory when available.
+
+Wild catches are disabled unless the ROM-verified name is outside the original 251.
+Older species may be caught only in a static sprite encounter. The controller takes a
+checkpoint before interacting with an adjacent sprite and restores it after a failed
+static capture, up to three times. Ordinary old-species wild battles pause for manual
+handling because the Gold battle menu is not yet decoded well enough to prove a safe
+automatic flee command. This is an intentional safety limit, not an automatic win or a
+complete autonomous playthrough.
 
 ## How it works
 
