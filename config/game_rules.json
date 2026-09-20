@@ -1,0 +1,12 @@
+{
+  "player_name": "JEV",
+  "starter": {
+    "preferred": [
+      "CHIKORITA",
+      "FLAMBEAR",
+      "CRUIZE"
+    ],
+    "fallback": "first_legal"
+  },
+  "nickname_starter": false
+}

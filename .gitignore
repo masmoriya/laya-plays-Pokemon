@@ -1,6 +1,13 @@
 *.gb
 *.gbc
 *.state
+*.ram
+*.rtc
+/data/*.sqlite
+/data/**/*.state
+/data/**/*.jsonl
+/data/pokemon_sprites/
+/assets/jev/**/*.png
 /runs/
 measure.json
 demo/*.mov

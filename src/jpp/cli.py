@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,9 +40,18 @@ def _pyboy(rom: Path, window: bool, unthrottled: bool):
     from pyboy import PyBoy
 
     emu = PyBoy(str(rom), window="SDL2" if window else "null")
-    if unthrottled:
-        emu.set_emulation_speed(0)  # the decisions/sec number is taken here
+    # PyBoy's null window defaults to unlimited speed. Make the safe behavior explicit
+    # so headless/overlay playback does not silently run faster than real time.
+    emu.set_emulation_speed(0 if unthrottled else 1)
     return emu
+
+
+def _audio_sink(emu, enabled=True):
+    if not enabled:
+        return None
+    from .audio import AudioSink
+
+    return AudioSink(getattr(getattr(emu, "sound", None), "sample_rate", 48_000))
 
 
 def cmd_state(args):
@@ -72,14 +82,18 @@ def cmd_probe(args):
     from .loop import probe
 
     emu = _pyboy(args.rom, window=True, unthrottled=False)
+    audio = _audio_sink(emu)
     try:
-        probe(emu, ticks=args.ticks)
+        probe(emu, ticks=args.ticks, on_audio=audio.feed if audio else None)
     finally:
+        if audio:
+            audio.close()
         emu.stop(save=False)
 
 
 def cmd_play(args):
     from .loop import play
+    from .game_adapter import RedAdapter, adapter_for_rom
 
     RUNS.mkdir(exist_ok=True)
     log = Path(args.out) if args.out else RUNS / "run.jsonl"
@@ -88,25 +102,56 @@ def cmd_play(args):
         window=not (args.headless or args.overlay or args.frames),
         unthrottled=args.headless and not args.overlay,
     )
+    audio = _audio_sink(emu, enabled=not args.headless and not args.frames)
     if args.state:
         with open(args.state, "rb") as f:
             emu.load_state(f)
-    client = policy.JevClient(replay_dir=args.replay)
+    adapter = adapter_for_rom(
+        args.rom,
+        getattr(emu, "cartridge_title", None),
+        forced=getattr(args, "game_adapter", "auto"),
+    )
+    provider_name = args.provider or os.environ.get("AGENT_PROVIDER")
+    if provider_name:
+        from .agent.factory import provider_from_env
+        from .agent.policy_adapter import ProviderPolicy
+
+        active_policy = ProviderPolicy(provider_from_env(provider_name))
+    else:
+        client = policy.JevClient(replay_dir=args.replay)
+        active_policy = policy.Policy(client, enabled=not args.no_jev)
     on_decision, on_frame = None, None
     if args.frames:
         on_decision, on_frame = _frame_capture(Path(args.frames), args.every)
     elif args.overlay:
         on_decision = _overlay_feed(emu)
     try:
-        records = play(
-            emu,
-            policy.Policy(client, enabled=not args.no_jev),
-            max_decisions=args.max_decisions,
-            log_path=log,
-            on_decision=on_decision,
-            on_frame=on_frame,
-        )
+        if isinstance(adapter, RedAdapter):
+            records = play(
+                emu,
+                active_policy,
+                max_decisions=args.max_decisions,
+                log_path=log,
+                on_decision=on_decision,
+                on_frame=on_frame,
+                on_audio=audio.feed if audio else None,
+            )
+        else:
+            from .agent.game_loop import play as play_generic
+
+            records = play_generic(
+                emu,
+                adapter,
+                active_policy,
+                max_decisions=args.max_decisions,
+                log_path=log,
+                on_decision=on_decision,
+                on_frame=on_frame,
+                on_audio=audio.feed if audio else None,
+            )
     finally:
+        if audio:
+            audio.close()
         emu.stop(save=False)
     print(f"{len(records)} decisions -> {log}")
 
@@ -186,6 +231,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="jpp")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    from .live import add_parser as add_live_parser
+
+    add_live_parser(sub)
+
     p = sub.add_parser("state", help="print the Jev request for a RAM image")
     p.add_argument("--ram", required=True, type=_file)
     p.add_argument("--goal", choices=[g.name for g in goals.GOALS])
@@ -201,6 +250,10 @@ def main(argv=None):
 
     p = sub.add_parser("play", help="run the agent")
     p.add_argument("--rom", required=True, type=_file)
+    p.add_argument(
+        "--game-adapter", choices=["auto", "red", "gold97", "generic"], default="auto",
+        help="decode the cartridge with its native adapter (auto detects Gold Reforged)",
+    )
     p.add_argument("--headless", action="store_true")
     p.add_argument(
         "--overlay",
@@ -214,6 +267,10 @@ def main(argv=None):
     )
     p.add_argument(
         "--no-jev", action="store_true", help="code defaults only, for a baseline"
+    )
+    p.add_argument(
+        "--provider", choices=["fake", "jev", "luna_codex"],
+        help="intent provider; defaults to legacy Jev client",
     )
     p.add_argument("--state", help="save state to start from, eg red-bedroom.state")
     p.add_argument("--frames", help="dump the overlay over the live game here, as PNGs")

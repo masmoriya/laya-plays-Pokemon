@@ -1,0 +1,17 @@
+{
+  "sheet": "assets/jev/jev-spritesheet.png",
+  "turnaround": "assets/jev/jev-turnaround-sheet.png",
+  "frame_size": [96, 112],
+  "frames_per_state": 4,
+  "states": [
+    "idle",
+    "thinking",
+    "decided",
+    "battle",
+    "celebrate",
+    "confused",
+    "recovering",
+    "hurt",
+    "sleep"
+  ]
+}

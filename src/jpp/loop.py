@@ -72,11 +72,12 @@ class BattleLatch:
 class Driver:
     """Emulator plus the decoded snapshot, one tick at a time."""
 
-    def __init__(self, emulator, on_frame=None):
+    def __init__(self, emulator, on_frame=None, on_audio=None):
         self.emu = emulator
-        # set only when a clip is being captured: the loop then advances one frame at a
-        # time so the recording gets every frame, not one in eight
+        # Set when a clip is being captured or audio is playing: the loop then advances
+        # one frame at a time so neither stream loses seven of every eight frames.
         self.on_frame = on_frame
+        self.on_audio = on_audio
         self.latch = BattleLatch()
         self.state = None
         self.turn = 0  # turns inside the current battle, reset when one ends
@@ -87,12 +88,15 @@ class Driver:
         self.heading: str | None = None  # last direction that actually moved the player
 
     def tick(self, frames: int = FRAMES_PER_TICK):
-        if self.on_frame is None:
+        if self.on_frame is None and self.on_audio is None:
             self.emu.tick(frames)
         else:
             for _ in range(frames):
                 self.emu.tick(1)
-                self.on_frame(self.emu)
+                if self.on_audio is not None:
+                    self.on_audio(self.emu)
+                if self.on_frame is not None:
+                    self.on_frame(self.emu)
         self.state = decode(self.emu.memory)
         before = self.latch.count
         self.latch.update(
@@ -134,13 +138,13 @@ class Driver:
         return self.emu.game_area_collision()
 
 
-def probe(emulator, ticks: int, out=print, every: int = 8):
+def probe(emulator, ticks: int, out=print, every: int = 8, on_audio=None):
     """Print the decoded state and the input-readiness candidates once a second.
 
     Task 2's discovery tool: walk the route by hand while this runs, and read off both
     the waypoint tiles and which byte combination gates input.
     """
-    driver = Driver(emulator)
+    driver = Driver(emulator, on_audio=on_audio)
     for i in range(ticks):
         st = driver.tick()
         if i % every:
@@ -233,9 +237,10 @@ def play(
     on_decision=None,
     max_ticks: int = 200_000,
     on_frame=None,
+    on_audio=None,
 ) -> list[dict]:
     """Run until the goal stack empties or `max_decisions` Jev calls have happened."""
-    driver = Driver(emulator, on_frame=on_frame)
+    driver = Driver(emulator, on_frame=on_frame, on_audio=on_audio)
     stack = goals.GoalStack()
     records: list[dict] = []
     log = log_path.open("a") if log_path else None

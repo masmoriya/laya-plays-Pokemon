@@ -1,0 +1,173 @@
+main	1	Start in Silent Town
+main	2	Fight your rival in Silent Town
+main	3	Travel through Route 101 / Silent Hills to Pagota City
+main	4	Climb Brass Tower
+main	5	Defeat Falkner in Pagota Gym
+main	6	Visit Bill after beating Falkner
+main	7	Use Cut to progress through Route 102
+main	8	Fight your rival near the Westport gate
+main	9	Enter Westport City
+main	10	Defeat Bugsy in Westport Gym
+main	11	Continue toward Teknos City
+main	12	Reach Teknos City and investigate the missing-child/Boulder Mines situation
+main	13	Return toward Teknos and trigger the Team Rocket takeover
+main	14	Enter Teknos Aquarium and defeat the Rocket members
+main	15	Defeat Whitney in Teknos Gym
+main	16	Receive Professor Oak's call about Birdon Town / Slowpoke Well
+main	17	Travel to Birdon Town
+main	18	Enter Slowpoke Well
+main	19	Fight your rival inside Slowpoke Well
+main	20	Clear Team Rocket out of Slowpoke Well
+main	21	Defeat Morty in Birdon Gym
+main	22	Continue through the newly opened routes toward Sanskrit Town and Sunpoint City
+main	23	Reach Sunpoint City and Sunpoint Docks
+main	24	Board Team Rocket's ship
+main	25	Return to Sanskrit Town
+main	26	Enter the Team Rocket house in Sanskrit
+main	27	Return to Team Rocket's ship at Sunpoint Docks
+main	28	Use the key and finish exploring the ship
+main	29	Confront the Rocket captain and Impostor Oak
+main	30	Travel onward toward Alloy City
+main	31	Reach Alloy City
+main	32	Defeat Jasmine in Alloy Gym
+main	33	Continue toward Blue Forest
+main	34	Discover that Pryce is not available at his Gym
+main	35	Go through Deepwater Passage
+main	36	Continue to Frostpoint Town
+main	37	Speak to Pryce again in Frostpoint
+main	38	Return to Blue Forest
+main	39	Defeat Pryce
+main	40	Return to the Frostpoint house
+main	41	Head toward Stand City through Route 112
+main	42	Fight your rival at the Stand City gate
+main	43	Enter Stand City
+main	44	Defeat Okera in Stand Gym
+main	45	After the Gym, watch the Impostor Oak presentation
+main	46	Enter the Team Rocket Hideout in Stand City
+main	47	Fight through the Hideout
+main	48	Confront Impostor Oak
+main	49	Defeat the Rocket Executive
+main	50	Reach the machine / ultimate weapon
+main	51	Your rival destroys the machine
+main	52	Professor Oak calls you
+main	53	Fly or travel back to Westport City
+main	54	Enter JOPM Radio Tower
+main	55	Fight through the Radio Tower
+main	56	Defeat the Rocket Executive
+main	57	Defeat Giovanni
+main	58	Rescue the Director
+main	59	Return toward Stand City
+main	60	Travel through National Park → Route 113 → Route 114
+main	61	Enter Reforged's Kanto Region
+main	62	Explore Kanto and make your way toward its Victory Road / Indigo Plateau
+main	63	Reach the final Nihon Gym
+main	64	Defeat the four trainers inside the final Gym
+main	65	Battle Red
+main	66	Defeat Red
+main	67	Use the newly opened Route 115 shortcut back toward Silent Town
+main	68	Visit Professor Oak
+main	69	Return to Alloy City and speak with the old man about the legendary Pokémon
+main	70	Go back to Brass Tower and catch Ho-Oh
+main	71	Optional but significant: return to the Alloy old man after catching Ho-Oh
+main	72	With all eight badges, head toward Crown Pass
+main	73	Fight your rival in Crown Pass
+main	74	Continue through Crown City
+main	75	Traverse Victory Road
+main	76	Reach the Nihon Pokémon League
+main	77	Defeat Elite Four Lorelei
+main	78	Defeat Elite Four Koga
+main	79	Defeat Elite Four Agatha
+main	80	Defeat Elite Four Giovanni
+main	81	Defeat Champion Lance
+main	82	Enter the Hall of Fame
+main	83	Resume the game after the credits
+main	84	Professor Oak contacts you
+main	85	Go to Oak's Lab in Silent Town
+main	86	Receive the S.S. Ticket
+main	87	Travel to Westport Docks
+main	88	Board the S.S. Aqua
+main	89	Complete the S.S. Aqua ship sequence
+main	90	Talk to the Captain
+main	91	Return to your cabin and sleep
+main	92	Wake up at Amami Docks
+main	93	Discover that the S.S. Aqua's Fuel Line is broken
+main	94	Explore Amami Town
+main	95	Pass through the Battle Tower area and continue into the island chain
+main	96	Progress through the Southwest Islands toward Kume City
+main	97	Reach Ryukyu City along the way
+main	98	Optional: defeat Trevor in Ryukyu's unofficial Gym
+main	99	Continue through the islands until Kume City
+main	100	Find the parts shop in Kume City and obtain the replacement Fuel Line
+main	101	Return to Amami Docks with the Fuel Line
+main	102	Give the Fuel Line to the ship crew
+main	103	The S.S. Aqua is repaired
+main	104	The repaired ship also opens additional Southwest Islands content
+main	105	Forked Strait's locked progression also becomes accessible
+main	106	Travel back to Nihon
+main	107	Go to Whirl Island
+main	108	In Gold 97 Reforged, the Lugia event is now available because you repaired the S.S. Aqua
+main	109	Reach Lugia's chamber
+main	110	Catch Lugia
+main	111	Return to Nanjo Forest with Ho-Oh and Lugia
+main	112	The Tri-Wing makes the legendary birds available
+main	113	Optional Rival Battle #6 in Nanjo Forest
+main	114	Optional Mewtwo
+main	115	Optional Mew
+main	116	Return to the Southwest Islands
+main	117	Travel through Forked Strait
+main	118	Enter Rainbow Island with Ho-Oh and Lugia in your party
+main	119	Go into the Rainbow Island cave
+main	120	Find Blue
+main	121	Talk to Blue while carrying Ho-Oh and Lugia
+main	122	Move to the opposite side of the waterfall as instructed
+main	123	Trigger the Ho-Oh/Lugia ritual
+main	124	Continue to the upper section of Rainbow Island
+main	125	Challenge Blue
+main	126	Defeat Blue
+main	127	Second credits roll
+optional	01	22	Ruins of Alph puzzles
+optional	02	31	Koban Island · Dragon's Maw · Clair
+optional	03	12	Deeper Boulder Mines
+optional	04	22	Endon Cave
+optional	05	31	Alloy Fighting Dojo
+optional	06	71	Ampare Cavern · Raikou
+optional	07	71	Magma Shaft · Entei
+optional	08	71	Tidal Grotto · Suicune
+optional	09	39	Whirl Island first visit
+optional	10	59	National Park · Bug-Catching Contest
+optional	11	62	Power Plant · Lt. Surge
+optional	12	62	Pokémon Tower
+optional	13	62	Kanto Battle Club
+optional	14	62	Trainer House
+optional	15	62	Rock Tunnel
+optional	16	62	Mt. Moon
+optional	17	62	Diglett's Cave
+optional	18	62	Seafoam Islands
+optional	19	62	Safari Zone Beta
+optional	20	62	Silph Co. · museum · Game Corner
+optional	21	62	Classic leader battles
+optional	22	62	Kanto Victory Road
+optional	23	94	Battle Tower visit
+optional	24	96	Kikai Caldera
+optional	25	96	Castle Mountain · shiny Dragonite
+optional	26	97	Ryukyu unofficial Gym
+optional	27	97	Ryukyu Hotel
+optional	28	97	Ryukyu city venues
+optional	29	96	Nanjo Forest first visit
+optional	30	96	Daito Ranch
+optional	31	96	Apple Orchard
+optional	32	96	Kume Point · Kerama Strait
+optional	33	104	Research Facility · Mewtwo
+optional	34	107	Whirl Islands · Lugia
+optional	35	111	Nanjo Forest return · rival · Tri-Wing
+optional	36	112	Joule Cave · Zapdos
+optional	37	112	Charred Summit · Moltres
+optional	38	112	Iced Cavern · Articuno
+optional	39	117	Tropical Island · Mew
+optional	40	127	Gym rematches
+optional	41	127	Clair rematch
+optional	42	127	League rematch
+optional	43	127	Blue rematch
+optional	44	127	Battle Club · Trainer House
+optional	45	127	Battle Tower challenge
+optional	46	127	Pokédex cleanup

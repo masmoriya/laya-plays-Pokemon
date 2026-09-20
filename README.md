@@ -80,7 +80,7 @@ cp .env.example .env
 
 | variable | required | purpose |
 |---|---|---|
-| `POKEMON_ROM` | to play | path to your own Pokemon Red dump |
+| `POKEMON_ROM` | to play | path to your own legally obtained GB/GBC ROM |
 | `TYPESAFE_API_KEY` | to call real Jev | direct API auth |
 | `JEV_BASE_URL` | no | point at a gateway shim, a recording proxy, or the local fake |
 
@@ -96,12 +96,92 @@ uv run jpp play --rom red.gb --state red-bedroom.state --frames /tmp/clip --ever
 uv run jpp probe --rom red.gb                             # watch the decoded state
 uv run jpp state --ram fixtures/ram_battle.bin            # the exact request body
 uv run jpp overlay --replay fixtures/runs/sample.jsonl    # the window, no ROM needed
+uv run jpp overlay --replay fixtures/runs/sample.jsonl --rate 1  # normal replay pace
 uv run measure runs/run.jsonl                             # the headline numbers
 ```
 
 `--frames` draws the overlay over the running emulator and writes a PNG per frame, which is
 how the clip above was recorded. No screen recorder, no cursor, exact length.
 `demo/README.md` has the ffmpeg lines.
+
+### Local playable MVP
+
+The new live window gives human control immediately, without any model account:
+
+```
+uv run jpp live --rom '/path/to/your/game.gbc' --speed 1
+```
+
+Arrows move. `Z` = A, `X` = B, `Enter` = Start, `Right Shift` = Select. `-` and `+`
+step through 0.25x, 0.5x, 1x, 2x, 3x, and 4x; `1` selects 1x, `2` selects 2x, and `0`
+also resets to 1x. `V` toggles audio mute. `F1` reveals the shortcut panel on demand. `Ctrl-S` writes a rotating snapshot under `data/checkpoints/`, and `Ctrl-R` restores the latest one.
+A checkpoint is also written when you quit normally, when a badge is earned, and about
+every two minutes while you play. The resizable dashboard shows the game at its original
+aspect ratio, authentic Gold 97 party front sprites when available, HP/level/held items,
+an explored terrain or navigation map, battle moves and PP, and the 127-step journey with
+optional side stops. Terrain is recorded only from visible overworld frames. Ambiguous story
+events remain pending until you confirm them. `M` changes map views; `C` confirms the current
+stage, `U` corrects a manual confirmation, and `O` marks the displayed side stop done.
+The map fits the entire current area, with an Expand action for more detail. Visible NPC
+sprites appear above the saved terrain; they are not baked into its history. Save and
+control actions sit in the footer. The local human-play window labels Jev and Luna as
+not connected rather than implying that either is streaming.
+ROMs, saves, extracted artwork, and the SQLite run database stay out of git.
+
+The live window automatically resumes the newest snapshot for the same run ID after you
+close and reopen it:
+
+```
+uv run jpp live --rom '/path/to/your/game.gbc' --run-id run-001
+```
+
+`--state /path/to/file.state` chooses a specific snapshot and restores its corresponding
+route and explored-map view. `--native-save` boots to the title screen so you can select
+the game's own Continue option; `--new` also boots to the title without erasing the
+cartridge save or snapshots. The Restart button returns to title and keeps a protected
+pre-restart snapshot. Save inside the game with Start → Save; the Save help button explains
+this distinction. The cartridge's battery-backed save persists when the window closes.
+Older explored tiles used an incorrect coordinate scale. The first run after this update
+archives that old map view and rebuilds the current map from newly observed terrain;
+route completion and snapshots remain intact.
+A sudden power loss can only lose work since the last periodic checkpoint; `Ctrl-S` is
+the safest way to mark an exact stopping point before shutting down.
+
+Any GB/GBC ROM works in human-control mode. Gold Reforged (`Gold 97 Reforged v6.1c.gbc`)
+is detected by its cartridge species table and reports its 253-entry Pokédex, party, and
+8 badges. Its starters are Chikorita, Flambear, and Cruize, not Cyndaquil, Totodile, and
+the standard Gold roster. Unsupported games use generic frame/control mode; the UI never
+invents maps, badges, or party data.
+
+Run rules live in `config/game_rules.json`:
+
+```json
+{
+  "player_name": "JEV",
+  "starter": {
+    "preferred": ["CHIKORITA", "FLAMBEAR", "CRUIZE"],
+    "fallback": "first_legal"
+  },
+  "nickname_starter": false
+}
+```
+
+Override per run with `--rules`, `--player-name`, or `--starter`. Rules select only from
+legal options exposed by a game adapter. New-game name screens still require the adapter
+to know that ROM's menu/RAM layout; until then, enter `JEV` manually once, and the run UI
+and persisted identity remain `JEV`.
+
+Autonomous intent providers use the native Red/Blue route controller or the adapter-
+neutral button controller for Gold Reforged and other supported cartridges:
+
+```
+AGENT_PROVIDER=fake uv run jpp play --rom /path/to/your/red.gb --headless
+AGENT_PROVIDER=luna_codex CODEX_MODEL=gpt-5.6-luna uv run jpp play --provider luna_codex --rom /path/to/your/red.gb --headless
+AGENT_PROVIDER=luna_codex uv run jpp play --provider luna_codex --rom "/path/to/Gold 97 Reforged v6.1c.gbc" --headless
+```
+
+Sign into Codex once with `codex`; `luna_codex` calls the supported Codex CLI and falls
+back to a safe legal action if CLI access is unavailable. It never reads browser tokens.
 
 ## How it works
 

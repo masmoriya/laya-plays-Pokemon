@@ -21,6 +21,9 @@ class Mon:
     types: tuple[str, ...]
     moves: tuple[str, ...] = ()
     pp: tuple[int, ...] = ()
+    held_item: str | None = None
+    species_id: int | None = None
+    species_data: object | None = None
 
     @property
     def fainted(self) -> bool:

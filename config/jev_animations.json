@@ -1,0 +1,11 @@
+{
+  "idle": {"frames": 4, "fps": 3, "loop": true},
+  "thinking": {"frames": 6, "fps": 6, "loop": true},
+  "decided": {"frames": 2, "fps": 4, "loop": false},
+  "battle": {"frames": 4, "fps": 6, "loop": true},
+  "celebrate": {"frames": 8, "fps": 8, "loop": false},
+  "confused": {"frames": 4, "fps": 4, "loop": true},
+  "recovering": {"frames": 6, "fps": 8, "loop": true},
+  "hurt": {"frames": 2, "fps": 5, "loop": false},
+  "sleep": {"frames": 4, "fps": 2, "loop": true}
+}
