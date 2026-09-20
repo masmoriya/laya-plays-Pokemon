@@ -30,8 +30,8 @@ class ProviderPolicy:
                 output_tokens=answer.get("output_tokens", 0),
                 total_tokens=answer.get("total_tokens", 0),
                 actual_cost_usd=answer.get("actual_cost_usd", answer.get("cost_usd")),
-                latency_ms=round((time.monotonic() - started) * 1000, 1),
-                request_made=True,
+                latency_ms=answer.get("latency_ms") or round((time.monotonic() - started) * 1000, 1),
+                request_made=answer.get("request_made", True),
                 model=getattr(self.provider, "model", "provider"),
             )
         except Exception as exc:

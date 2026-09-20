@@ -32,15 +32,18 @@ class LunaScreenReader:
             }))
             image = pygame.surfarray.make_surface(frame.swapaxes(0, 1)[:, :, :3])
             pygame.image.save(image, str(path))
+            prompt = (
+                "Describe only the visible Game Boy screen. Return a JSON object with "
+                "screen_text (array of literal visible text lines), mode (battle, menu, "
+                "dialogue, overworld, or unknown), and uncertainty (short text). "
+                "Do not choose an action, infer hidden game state, or run tools."
+            )
             result = subprocess.run(
                 ["codex", "exec", "--ephemeral", "--json", "--sandbox", "read-only",
                  "--output-schema", str(schema),
-                 "--model", self.model, "--image", str(path),
-                 "Describe only the visible Game Boy screen. Return a JSON object with "
-                 "screen_text (array of literal visible text lines), mode (battle, menu, "
-                 "dialogue, overworld, or unknown), and uncertainty (short text). "
-                 "Do not choose an action, infer hidden game state, or run tools."],
-                capture_output=True, text=True, timeout=self.timeout, check=False,
+                 "--model", self.model, "--image", str(path)],
+                input=prompt, capture_output=True, text=True,
+                timeout=self.timeout, check=False,
             )
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or "Luna screen reading failed")

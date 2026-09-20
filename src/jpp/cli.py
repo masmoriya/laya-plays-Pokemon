@@ -37,6 +37,16 @@ def _pyboy(rom: Path, window: bool, unthrottled: bool):
     """Two separate switches. The overlay wants a frame but not a second window: pygame
     and pyboy ship different SDL2 builds, and letting both open one crashes the process.
     """
+    # PyBoy bundles PySDL2's SDL2 on macOS while pygame bundles its own copy.
+    # When pygame is already loaded, point PySDL2 at that same dylib so the
+    # process does not load two SDL2 frameworks (which triggers duplicate
+    # Objective-C class warnings and can crash during window creation).
+    pygame = sys.modules.get("pygame")
+    if pygame is not None:
+        pygame_dir = Path(pygame.__file__).resolve().parent / ".dylibs"
+        if pygame_dir.is_dir():
+            os.environ.setdefault("PYSDL2_DLL_PATH", str(pygame_dir))
+
     from pyboy import PyBoy
 
     emu = PyBoy(str(rom), window="SDL2" if window else "null")
@@ -112,7 +122,10 @@ def cmd_play(args):
         forced=getattr(args, "game_adapter", "auto"),
     )
     provider_name = args.provider or os.environ.get("AGENT_PROVIDER")
-    if provider_name:
+    # Keep the explicit replay and no-provider baseline modes intact while making
+    # ordinary autonomous runs local Laya by default.
+    if provider_name or not (args.replay or args.no_jev):
+        provider_name = provider_name or "laya"
         from .agent.factory import provider_from_env
         from .agent.policy_adapter import ProviderPolicy
 
@@ -150,7 +163,11 @@ def cmd_play(args):
                 on_audio=audio.feed if audio else None,
                 run_id=args.run_id,
                 memory_state=args.state,
+                memory_state_out=args.end_state,
             )
+        if args.end_state:
+            with Path(args.end_state).open("wb") as handle:
+                emu.save_state(handle)
     finally:
         if audio:
             audio.close()
@@ -272,10 +289,11 @@ def main(argv=None):
         "--no-jev", action="store_true", help="code defaults only, for a baseline"
     )
     p.add_argument(
-        "--provider", choices=["fake", "jev", "luna_codex"],
-        help="intent provider; defaults to legacy Jev client",
+        "--provider", choices=["fake", "jev", "laya", "luna_codex"],
+        help="intent provider; defaults to the local Laya sidecar",
     )
     p.add_argument("--state", help="save state to start from, eg red-bedroom.state")
+    p.add_argument("--end-state", help="write the final emulated state for a later run")
     p.add_argument("--frames", help="dump the overlay over the live game here, as PNGs")
     p.add_argument("--every", type=int, default=2, help="capture 1 frame in N (60/N fps)")
     p.set_defaults(func=cmd_play)

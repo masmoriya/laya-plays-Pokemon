@@ -70,8 +70,8 @@ class LivePanels:
                              ACCENT if current else MUTED)
                 lines = self.ui.wrap(f"{item[0]}. {item[1]}", font, box.width - 80)
                 for index, line in enumerate(lines):
-                    self.ui.text(line, (box.x + 65, row_y + index * 18), font, color)
-                row_y += max(42, len(lines) * 18 + 8)
+                    self.ui.text(line, (box.x + 65, row_y + index * font.get_linesize()), font, color)
+                row_y += max(42, len(lines) * font.get_linesize() + 8)
         optional = stages.get("optional")
         self.ui.selected_optional = optional[0] if optional else None
         if optional:
@@ -212,6 +212,6 @@ class LivePanels:
             self.ui.text("Current step unavailable", (box.x + 14, box.y + 41), self.ui.small, MUTED)
             return
         for index, line in enumerate(self.ui.wrap(f"{item[0]}. {item[1]}", self.ui.small_bold, box.width - 28)[:2]):
-            self.ui.text(line, (box.x + 14, box.y + 34 + index * 18), self.ui.small_bold, TEXT)
+            self.ui.text(line, (box.x + 14, box.y + 34 + index * self.ui.small_bold.get_linesize()), self.ui.small_bold, TEXT)
         self.ui.button("confirm_stage", "Confirm", pygame.Rect(box.right - 156, box.bottom - 28, 78, 22), GOOD)
         self.ui.button("undo_stage", "Undo", pygame.Rect(box.right - 70, box.bottom - 28, 56, 22), MUTED)

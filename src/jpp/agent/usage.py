@@ -64,10 +64,11 @@ class UsageTotals:
     """Accumulate completed model requests without claiming unavailable billing data."""
 
     def __init__(self):
-        self._buckets = {"jev": UsageBucket(), "luna": UsageBucket()}
+        self._buckets = {"jev": UsageBucket(), "laya": UsageBucket(), "luna": UsageBucket()}
         self._rates = {
             "jev": (_rate_from_env("JEV_INPUT_PRICE_PER_1M") or 0.042 / 1_000_000,
                     _rate_from_env("JEV_OUTPUT_PRICE_PER_1M")),
+            "laya": (0.0, 0.0),
             "luna": (_rate_from_env("CODEX_INPUT_PRICE_PER_1M"),
                       _rate_from_env("CODEX_OUTPUT_PRICE_PER_1M")),
         }

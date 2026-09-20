@@ -61,12 +61,6 @@ class LiveMap:
         previous_clip = self.ui.canvas.get_clip()
         self.ui.canvas.set_clip(view)
         location = self._location_rect(state, map_key, target, source, scale)
-        current = {entity.key for entity in self.ui.map_entities
-                   if entity.map_key == map_key and self._in_bounds(entity, columns, rows)}
-        remembered = getattr(journey, "entities", {}).get(map_key, {}) if journey else {}
-        for entity_key, (pixel_x, pixel_y, rgba) in remembered.items():
-            if entity_key not in current:
-                self._sprite(target, source, scale, pixel_x, pixel_y, rgba, alpha=112)
         for entity in self.ui.map_entities:
             if entity.map_key == map_key and self._in_bounds(entity, columns, rows):
                 self._sprite(target, source, scale, entity.pixel_x, entity.pixel_y, entity.rgba)
@@ -94,7 +88,7 @@ class LiveMap:
         side = max(2, round(16 * scale))
         rect = pygame.Rect(target.x + round((pixel_x - source.x) * scale),
                            target.y + round((pixel_y - source.y) * scale), side, side)
-        return rect.inflate(max(6, round(8 * scale)), max(6, round(8 * scale)))
+        return rect.inflate(max(14, round(20 * scale)), max(14, round(20 * scale)))
 
     def _draw_location_border(self, rect):
         """Keep the current area readable above a busy sprite and terrain texture."""

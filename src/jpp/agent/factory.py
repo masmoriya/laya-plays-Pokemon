@@ -2,7 +2,7 @@
 
 import os
 
-from .providers import FakeProvider, JevProvider, LunaCodexProvider
+from .providers import FakeProvider, JevProvider, LayaProvider, LunaCodexProvider
 
 
 def provider_from_env(name=None):
@@ -11,7 +11,8 @@ def provider_from_env(name=None):
         return LunaCodexProvider()
     if name == "jev":
         return JevProvider()
+    if name == "laya":
+        return LayaProvider()
     if name == "fake":
         return FakeProvider()
     raise ValueError(f"unknown AGENT_PROVIDER: {name}")
-

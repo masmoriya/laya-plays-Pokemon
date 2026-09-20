@@ -8,7 +8,7 @@ import time
 
 from .route_progress import RouteProgress
 
-MAP_VERSION = 2  # 8-pixel tiles anchored to Gold 97's 16-pixel map steps
+MAP_VERSION = 3  # background decoded from VRAM, not lagging screen pixels
 
 
 class Journey:
@@ -50,10 +50,13 @@ class Journey:
         self.entity_revision = 0
         row = self.db.execute("SELECT map_version FROM journey_meta WHERE run_id=?", (run_id,)).fetchone()
         if row is None or row[0] != MAP_VERSION:
-            if self.tiles:
-                self.record_checkpoint(f"archive:{run_id}:{time.time_ns()}:legacy-map", map_version=1)
+            if self.tiles or self.entities:
+                self.record_checkpoint(f"archive:{run_id}:{time.time_ns()}:legacy-map",
+                                       map_version=row[0] if row else 1)
                 self.tiles = {}
+                self.entities = {}
                 self.db.execute("DELETE FROM journey_tiles WHERE run_id=?", (run_id,))
+                self.db.execute("DELETE FROM journey_entities WHERE run_id=?", (run_id,))
             self.db.execute("INSERT OR REPLACE INTO journey_meta VALUES(?,?)", (run_id, MAP_VERSION))
             self.db.commit()
 
@@ -201,7 +204,8 @@ class Journey:
                 self.tiles.setdefault(key, {})[(x, y)] = (tile_id, rgba)
                 self.db.execute("INSERT INTO journey_tiles VALUES(?,?,?,?,?,?)",
                                 (self.run_id, key, x, y, tile_id, rgba))
-            for map_key, entity_key, pixel_x, pixel_y, rgba_hex in payload.get("entities", ()):
+            for map_key, entity_key, pixel_x, pixel_y, rgba_hex in (
+                    payload.get("entities", ()) if payload.get("map_version") == MAP_VERSION else ()):
                 rgba = bytes.fromhex(rgba_hex)
                 if len(rgba) != 1024 or not entity_key.startswith("npc:v2:"):
                     continue

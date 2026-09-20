@@ -5,7 +5,7 @@ import numpy as np
 import pygame
 
 from jpp.character.animation import Animation
-from jpp.live_ui import LiveUI, SIZE
+from jpp.live_ui import LEFT, LiveUI, SIZE
 from jpp.pokemon_sprites import _surface
 from jpp.route_progress import RouteProgress
 from jpp.route_progress import MAIN
@@ -53,6 +53,36 @@ def test_dashboard_renders_six_members_battle_and_scales_without_overlapping_act
         pygame.quit()
 
 
+def test_dashboard_distinguishes_laya_health_from_autonomous_mode():
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        rendered = []
+        original = ui.text
+
+        def capture(value, pos, font=None, color=None, **kwargs):
+            if pos == (LEFT.x + 75, LEFT.y + 14):
+                rendered.append(str(value))
+            if color is None:
+                original(value, pos, font, **kwargs)
+            else:
+                original(value, pos, font, color, **kwargs)
+
+        # Keep the assertion focused on the status text without depending on a
+        # particular font rasterization.
+        ui.text = capture
+        ui._thoughts(
+            {"luna": [], "laya": []}, Animation(),
+            {"tactical_provider": "laya", "tactical_label": "Laya",
+             "tactical_status": "unavailable", "model_usage": {"laya": {}, "luna": {}}},
+        )
+        assert "Unavailable" in rendered
+    finally:
+        pygame.quit()
+
+
 def test_current_journey_step_wraps_in_bold_without_ellipsis():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
@@ -86,7 +116,7 @@ def test_rom_sprite_white_pixels_are_opaque():
         pygame.quit()
 
 
-def test_map_draws_ghosts_below_current_sprites_and_player_sprite():
+def test_map_draws_current_sprites_without_stale_npc_ghosts():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
     try:
@@ -104,8 +134,7 @@ def test_map_draws_ghosts_below_current_sprites_and_player_sprite():
 
         panel._area(_state(), journey, pygame.Rect(0, 0, 400, 300))
 
-        assert calls == [((16, 24, bytes(1024)), {"alpha": 112}),
-                         ((32, 40, bytes(1024)), {}),
+        assert calls == [((32, 40, bytes(1024)), {}),
                          ((64, 56, bytes(16 * 16 * 4)), {})]
     finally:
         pygame.quit()
@@ -135,9 +164,11 @@ def test_map_location_border_follows_captured_sprite():
 
         source = panel._source_rect(state, 80, 60)
         assert source == pygame.Rect(0, 0, 640, 480)
+        assert panel._location_rect(state, "14:04", pygame.Rect(50, 0, 300, 300),
+                                    pygame.Rect(0, 0, 320, 320), 0.9375).width > 30
         ui.canvas.fill((0, 0, 0))
         panel._area(state, SimpleNamespace(tiles={}, tile_revision=0), pygame.Rect(0, 0, 400, 300))
-        assert ui.canvas.get_at((158, 60))[:3] == (236, 157, 111)
+        assert ui.canvas.get_at((153, 55))[:3] == (236, 157, 111)
     finally:
         pygame.quit()
 

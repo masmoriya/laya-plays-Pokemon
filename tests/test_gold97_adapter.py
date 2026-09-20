@@ -18,6 +18,8 @@ from jpp.gold97_adapter import (
     ENEMY_MON,
     OTHER_TRAINER_CLASS,
     OTHER_TRAINER_ID,
+    READ_OAKS_EMAIL,
+    OPENING_SCENE,
     Gold97Adapter,
 )
 from jpp.gold97_data import NAME_WIDTH, Gold97RomData
@@ -79,6 +81,17 @@ def test_adapter_does_not_promote_uninitialized_party_or_map_ram(tmp_path):
     progress = ProgressTracker(map_history=["MAP_00_00"]).update(state).to_dict()
     assert progress["party"] == []
     assert progress["map_history"] == []
+
+
+def test_adapter_exposes_opening_progress_from_verified_ram(tmp_path):
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[MAP_GROUP], memory[MAP_NUMBER] = 20, 5
+    memory[READ_OAKS_EMAIL] = 0x20
+    memory[OPENING_SCENE[5]] = 1
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert state.read_oaks_email
+    assert state.opening_scene == 1
 
 
 def test_adapter_uses_party_species_list_when_struct_header_lags(tmp_path):

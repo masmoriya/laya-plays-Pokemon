@@ -34,3 +34,13 @@ def test_resume_can_find_a_legacy_timestamp_checkpoint(tmp_path):
     legacy.write_bytes(b"state")
 
     assert CheckpointManager(tmp_path).latest("run-001") == legacy
+
+
+def test_recovery_selects_a_snapshot_not_the_stuck_exit(tmp_path):
+    manager = CheckpointManager(tmp_path)
+    snapshot, _ = manager.save(FakeEmulator(), {"run_id": "run-001"}, "snapshot")
+    manager.save(FakeEmulator(), {"run_id": "run-001"}, "exit")
+    manager.save(FakeEmulator(), {"run_id": "run-002"}, "snapshot")
+
+    assert manager.latest_reason("run-001", "snapshot") == snapshot
+    assert manager.latest_reason("run-003", "snapshot") is None

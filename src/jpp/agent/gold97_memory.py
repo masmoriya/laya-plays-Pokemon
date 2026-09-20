@@ -4,6 +4,23 @@ import json
 import sqlite3
 
 
+NAVIGATION_VERSION = 2
+
+
+def _migrate_world(world):
+    """Drop pre-v2 blocked edges recorded before the cartridge hold fix."""
+    if not isinstance(world, dict):
+        world = {}
+    world.setdefault("maps", {})
+    world.setdefault("facts", [])
+    if int(world.get("navigation_version", 1) or 1) < NAVIGATION_VERSION:
+        for area in world["maps"].values():
+            if isinstance(area, dict):
+                area["blocked"] = []
+        world["navigation_version"] = NAVIGATION_VERSION
+    return world
+
+
 class Gold97Memory:
     def __init__(self, run_id, database="data/jev.sqlite"):
         self.run_id = run_id
@@ -14,7 +31,10 @@ class Gold97Memory:
                         "run_id TEXT NOT NULL, path TEXT NOT NULL, payload TEXT NOT NULL,"
                         "PRIMARY KEY(run_id,path))")
         row = self.db.execute("SELECT payload FROM agent_world WHERE run_id=?", (run_id,)).fetchone()
-        self.world = json.loads(row[0]) if row else {"maps": {}, "facts": []}
+        self.world = _migrate_world(json.loads(row[0]) if row else {
+            "maps": {}, "facts": [], "navigation_version": NAVIGATION_VERSION,
+        })
+        self.save()
 
     def map(self, key):
         return self.world["maps"].setdefault(key, {"visited": [], "edges": [], "blocked": []})
@@ -37,6 +57,15 @@ class Gold97Memory:
         if destination != origin:
             self.visited(key, destination)
         self.save()
+
+    def clear_blocked_at(self, key, position):
+        """Discard edges that may have been blocked by a moving battle NPC."""
+        area = self.map(key)
+        before = len(area["blocked"])
+        area["blocked"] = [edge for edge in area["blocked"]
+                           if edge[0] != list(position)]
+        if len(area["blocked"]) != before:
+            self.save()
 
     def remember(self, kind, value, map_key=""):
         fact = {"kind": kind, "value": str(value)[:180], "map": map_key}
@@ -66,12 +95,12 @@ class Gold97Memory:
                               (self.run_id, str(path))).fetchone()
         if row is None:
             return False
-        self.world = json.loads(row[0])
+        self.world = _migrate_world(json.loads(row[0]))
         self.save()
         return True
 
     def reset(self):
-        self.world = {"maps": {}, "facts": []}
+        self.world = {"maps": {}, "facts": [], "navigation_version": NAVIGATION_VERSION}
         self.save()
 
     def close(self):

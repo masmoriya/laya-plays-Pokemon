@@ -1,6 +1,7 @@
 """Local playable window with keyboard controls and a compact run HUD."""
 
 from pathlib import Path
+import os
 import time
 
 import pygame
@@ -11,8 +12,11 @@ from .character.character_state import CharacterState
 from .audio import AudioSink, pre_init as pre_init_audio
 from .game_adapter import adapter_for_rom
 from .gold97_adapter import Gold97Adapter
+from .gold97_names import apply_requested_names
+from .gold97_collision import Gold97CollisionMap
 from .frame_pacer import FramePacer
 from .agent.gold97_controller import Gold97Controller
+from .agent.gold97_input import press_action, release_restored_buttons
 from .live_ui import SIZE, LiveUI
 from .battle_progress import BattleProgress
 from .journey import Journey
@@ -52,7 +56,14 @@ def run(
     speed=1.0,
     resume=True,
     native_save=False,
+    provider_name=None,
 ):
+    # Keep PyBoy and pygame on one SDL2 build on macOS. PyBoy otherwise loads
+    # pysdl2-dll alongside pygame's bundled dylib and emits duplicate-class
+    # warnings (and may crash when both touch Cocoa).
+    pygame_dir = Path(pygame.__file__).resolve().parent / ".dylibs"
+    if pygame_dir.is_dir():
+        os.environ.setdefault("PYSDL2_DLL_PATH", str(pygame_dir))
     from pyboy import PyBoy
 
     pre_init_audio()
@@ -119,12 +130,23 @@ def run(
     pokemon_sprites = PokemonSprites(rom) if isinstance(adapter, Gold97Adapter) else None
     ui = LiveUI(screen, pokemon_sprites)
     camera = WorldCamera()
-    thoughts = {"jev": [], "luna": []}
+    collision_cache = None
+    provider_name = (provider_name or os.environ.get("AGENT_PROVIDER") or "laya").lower()
+    if provider_name not in {"fake", "jev", "laya"}:
+        raise ValueError(f"unsupported live tactical provider: {provider_name}")
+    tactical_label = provider_name.title()
+    laya_vision = os.environ.get("LAYA_VISION", "0").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    vision_enabled = provider_name != "laya" or laya_vision
+    thoughts = {provider_name: [], "luna": []}
+    # An explicit Laya launch is an autonomous launch; F2 still toggles it off/on.
+    autonomous = provider_name == "laya"
 
     def add_thought(source, message):
         if not message:
             return
-        entries = thoughts[source]
+        entries = thoughts.setdefault(source, [])
         if not entries or entries[-1] != message:
             entries.append(message)
             del entries[:-8]
@@ -137,7 +159,7 @@ def run(
         return path
 
     def restore_latest():
-        nonlocal last_save, battles
+        nonlocal last_save, battles, collision_cache
         restored = checkpoints.latest(run_id)
         if restored is None:
             add_thought("jev", "No snapshot to restore yet.")
@@ -150,6 +172,7 @@ def run(
         if isinstance(adapter, Gold97Adapter):
             adapter.reset_transition()
             camera.reset()
+            collision_cache = None
         ui.timeline.player = None
         if not journey.restore_checkpoint(restored):
             journey.reset_view()
@@ -171,7 +194,7 @@ def run(
 
     def action(name):
         nonlocal emu, audio, last_save, skip_exit_checkpoint, battles
-        nonlocal autonomous, controller
+        nonlocal autonomous, controller, collision_cache
         if name == "snapshot":
             save_agent("snapshot")
             last_save = time.monotonic()
@@ -179,6 +202,7 @@ def run(
         elif name == "restore":
             restore_latest()
         elif name == "restart":
+            collision_cache = None
             # Preserve the return point before reboot. Never remove the cartridge RAM.
             save_agent("before-restart")
             audio.close()
@@ -201,9 +225,14 @@ def run(
             add_thought("jev", "Use Start → Save in game. Your game save persists on quit.")
         elif name == "toggle_jev" and isinstance(adapter, Gold97Adapter):
             if controller is None:
+                from .agent.factory import provider_from_env
+                from .agent.policy_adapter import ProviderPolicy
                 controller = Gold97Controller(
                     run_id, save_encounter=lambda: save_agent("encounter"),
-                    restore_encounter=restore_encounter)
+                    restore_encounter=restore_encounter,
+                    restore_stuck=restore_stuck,
+                    policy=ProviderPolicy(provider_from_env(provider_name)),
+                    vision_enabled=vision_enabled)
                 if state_path:
                     if not controller.memory.restore(state_path):
                         controller.memory.reset()
@@ -240,6 +269,27 @@ def run(
         audio.flush()
         journey.restore_checkpoint(path)
 
+    def restore_stuck():
+        earlier = checkpoints.latest_reason(run_id, "snapshot")
+        if earlier is None:
+            return None
+        save_agent("before-restart")
+        restore_encounter(earlier)
+        add_thought("jev", "Bedroom input stalled; restored a prior snapshot.")
+        return earlier
+
+    if autonomous and isinstance(adapter, Gold97Adapter):
+        from .agent.factory import provider_from_env
+        from .agent.policy_adapter import ProviderPolicy
+        controller = Gold97Controller(
+            run_id, save_encounter=lambda: save_agent("encounter"),
+            restore_encounter=restore_encounter,
+            restore_stuck=restore_stuck,
+            policy=ProviderPolicy(provider_from_env(provider_name)),
+            vision_enabled=vision_enabled)
+        if state_path and not controller.memory.restore(state_path):
+            controller.memory.reset()
+
     try:
         while True:
             for event in pygame.event.get():
@@ -265,8 +315,16 @@ def run(
             _press_held_buttons(emu, held_buttons)
             emu.tick()
             audio.feed(emu)
+            if isinstance(adapter, Gold97Adapter):
+                names = apply_requested_names(emu)
+                if names:
+                    add_thought("jev", "Named " + " and ".join(names) + ".")
             snapshot = adapter.snapshot(emu)
             state = snapshot.state
+            if (isinstance(adapter, Gold97Adapter) and
+                    (collision_cache is None or collision_cache.map_key !=
+                     (state.map_group, state.map_number))):
+                collision_cache = Gold97CollisionMap.from_emulator(emu, state)
             world_origin = camera.position(emu, state) if isinstance(adapter, Gold97Adapter) else None
             update = snapshot.badge_update
             journey.observe_route(state)
@@ -281,10 +339,13 @@ def run(
             progress["game_title"] = snapshot.title
             progress["player_name"] = rules.player_name
             progress["speed"] = speed
-            progress["jev_connected"] = bool(autonomous and controller and not controller.paused)
-            progress["luna_connected"] = bool(controller and controller.vision_future)
-            progress["jev_auto"] = autonomous
-            progress["jev_available"] = isinstance(adapter, Gold97Adapter)
+            progress["tactical_provider"] = provider_name
+            progress["tactical_label"] = tactical_label
+            # This reports whether the optional transcriber is configured, not
+            # whether a single asynchronous frame is in flight.
+            progress["luna_connected"] = bool(controller and controller.vision is not None)
+            progress["tactical_auto"] = autonomous
+            progress["tactical_available"] = isinstance(adapter, Gold97Adapter)
             if not snapshot.supports_ram_progress:
                 progress["current_map"] = f"{snapshot.title} · RAM map pending"
             animation.state = CharacterState.BATTLE if state.in_battle else CharacterState.IDLE
@@ -298,7 +359,7 @@ def run(
                 save_agent("interval")
                 last_save = time.monotonic()
             map_key = f"{state.map_group:02X}:{state.map_number:02X}"
-            if (world_origin is not None
+            if (world_origin is not None and camera.map_frames >= 3
                     and (map_key, state.x, state.y) != journey._last_sample):
                 observed = visible_background(emu, state, world_origin=world_origin)
                 journey.observe_tiles(state, observed)
@@ -310,18 +371,40 @@ def run(
             if world_origin is not None:
                 detections = visible_entities(emu, state, world_origin=world_origin)
                 ui.map_entities = journey.track_entities(state, detections)
-            elif not isinstance(adapter, Gold97Adapter):
+            else:
                 ui.map_entities = ()
             if isinstance(adapter, Gold97Adapter):
                 if autonomous and controller:
                     choice = controller.step(
                         state, frame=frame, entities=ui.map_entities,
-                        overworld=world_origin is not None)
+                        overworld=world_origin is not None,
+                        terrain=collision_cache)
                     if choice:
-                        emu.button(choice, 4)
+                        # Send one bounded cartridge press per decision.
+                        press_action(emu, choice, menu=(state.in_battle or
+                                     world_origin is None or controller.healing is not None))
+                    event = controller.pop_provider_event()
+                    if event:
+                        add_thought(provider_name, event)
                     if controller.paused:
                         autonomous = False
-                        add_thought("jev", controller.pause_reason)
+                        add_thought(provider_name, controller.pause_reason)
+            health = controller.provider_health if controller else "offline"
+            if health == "unavailable":
+                tactical_status = "unavailable"
+            elif autonomous and controller and not controller.paused:
+                tactical_status = "checking" if health == "checking" else "live"
+            else:
+                tactical_status = "not_connected"
+            progress["tactical_health"] = health
+            progress["tactical_status"] = tactical_status
+            progress["tactical_connected"] = tactical_status == "live"
+            progress["tactical_detail"] = (controller.provider_health_error
+                                             if controller else "")
+            # Keep legacy keys for existing HUD consumers and recorded runs.
+            progress["jev_connected"] = progress["tactical_connected"]
+            progress["jev_auto"] = progress["tactical_auto"]
+            progress["jev_available"] = progress["tactical_available"]
             progress["model_usage"] = (controller.usage_snapshot()
                                         if controller else {"jev": {}, "luna": {}})
             player = (visible_player(emu, state, world_origin=world_origin)
@@ -372,3 +455,4 @@ def _load_state(emu, path):
     """Load an emulator snapshot from disk without coupling callers to PyBoy I/O."""
     with Path(path).open("rb") as handle:
         emu.load_state(handle)
+    release_restored_buttons(emu)

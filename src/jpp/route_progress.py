@@ -46,6 +46,12 @@ class RouteProgress:
         return next((step for step in MAIN if step not in self.completed), None)
 
     def observe(self, state):
+        # The scripted opening rival encounter is complete before the player
+        # reaches Route 101 with a starter. This also repairs older journeys
+        # whose tracker did not observe the battle itself.
+        if (getattr(state, "area_name", "") in {"Route 101", "Silent Hills", "Pagota City"}
+                and getattr(state, "party", ())):
+            self.completed.update((1, 2))
         badges = len(getattr(state, "badge_ids", ()))
         for step, count in _BADGE_STEPS.items():
             if badges >= count:

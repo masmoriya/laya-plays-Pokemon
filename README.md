@@ -1,5 +1,16 @@
 # jev-plays-pokemon-red
 
+> Public stream identity: **Laya Plays Pokémon — Jev’s offline sister AI.**
+
+For the viewer-facing project story, Twitch copy, offline cost/privacy statement, and
+the exact distinction between Laya, optional Luna, and hosted Jev, see
+[`docs/STREAM.md`](docs/STREAM.md).
+
+The public project landing page lives in the separate public repository:
+[masmoriya/laya-plays-pokemon](https://github.com/masmoriya/laya-plays-pokemon), with the
+live site at [masmoriya.github.io/laya-plays-pokemon](https://masmoriya.github.io/laya-plays-pokemon/).
+This repository stays private and contains the gameplay implementation and local assets.
+
 Pokemon Red played by a model that only outputs probabilities. Code reads the Game Boy's
 memory into a typed snapshot and hands the model a menu of the moves that are actually
 legal; it returns a probability for each one. The bars are those probabilities.
@@ -83,6 +94,32 @@ cp .env.example .env
 | `POKEMON_ROM` | to play | path to your own legally obtained GB/GBC ROM |
 | `TYPESAFE_API_KEY` | to call real Jev | direct API auth |
 | `JEV_BASE_URL` | no | point at a gateway shim, a recording proxy, or the local fake |
+
+### Local Laya
+
+Laya is the default self-hosted tactical provider. Install it, download a compatible
+Laya checkpoint ahead of time, then point `LAYA_MODEL_PATH` at the checkpoint directory
+(the directory containing `rl_agent_config.json` and `model.safetensors`):
+
+```
+uv sync --extra laya
+uv run hf download 'convaiinnovations/laya' --include 'multilingual/*' --local-dir '/path/to/laya-cache'
+LAYA_MODEL_PATH='/path/to/laya-cache/multilingual' uv run laya-sidecar --device cpu
+curl 'http://127.0.0.1:8765/health'
+AGENT_PROVIDER=laya uv run jpp play --rom 'red.gb' --headless
+AGENT_PROVIDER=laya uv run jpp live --provider laya --rom 'Gold 97 Reforged v6.1c.gbc'
+```
+
+The sidecar binds to `127.0.0.1:8765` by default. Set `LAYA_BASE_URL`, `LAYA_TIMEOUT_S`,
+or `LAYA_MIN_CONFIDENCE` for the game client; the default accepts any legal, schema-valid
+choice. Set a positive confidence threshold only when you explicitly want stricter gating.
+Set `LAYA_HOST`, `LAYA_PORT`, `LAYA_MODEL`, and `LAYA_DEVICE` for the sidecar. It never
+downloads model weights while gameplay is running.
+
+Laya chooses all movement, menu, and battle controls. If a ROM screen contains text that
+the RAM adapter cannot decode, set `LAYA_VISION=1` to enable the optional Luna screen
+transcriber; Luna only supplies visible text and never chooses controls. Jev is not used
+by the Laya path.
 
 Bring your own ROM. This repo contains no game data and will not help you find any. Save
 states hold copyrighted memory, so they stay out of git.
@@ -175,24 +212,25 @@ Autonomous intent providers use the native Red/Blue route controller or the adap
 neutral button controller for Gold Reforged and other supported cartridges:
 
 ```
+AGENT_PROVIDER=laya uv run jpp play --rom /path/to/your/red.gb --headless
+AGENT_PROVIDER=laya uv run jpp live --provider laya --rom '/path/to/Gold 97 Reforged v6.1c.gbc'
 AGENT_PROVIDER=fake uv run jpp play --rom /path/to/your/red.gb --headless
-AGENT_PROVIDER=luna_codex CODEX_MODEL=gpt-5.6-luna uv run jpp play --provider luna_codex --rom /path/to/your/red.gb --headless
-TYPESAFE_API_KEY=... uv run jpp play --provider jev --rom '/path/to/Gold 97 Reforged v6.1c.gbc' --headless
 ```
 
-Sign into Codex once with `codex`; `luna_codex` calls the supported Codex CLI and falls
-back to a safe legal action if CLI access is unavailable. It never reads browser tokens.
+Laya is local and does not require an OpenAI account, OAuth, or Jev. Luna remains an optional
+Codex CLI screen reader for future providers; it never chooses controls in the Laya path.
 
-Gold 97 Reforged now uses a Jev-led controller for headless `play`. In the local `live`
-window, press F2 or use Play Jev to opt in; F2, Pause Jev, or holding a movement key
-returns to manual control. The controller sends cartridge-derived text to Jev and only
-asks Luna to describe a screen when the game is in a menu/battle or repeated movement
-cannot be explained by the observed map. If either model is unavailable or an unknown
-screen cannot be verified, autonomous play pauses. The agent does not receive the
-prewritten story route. It remembers explored coordinates, failed steps, exits, and
+Gold 97 Reforged now uses a Laya-led controller for headless `play`. In the local `live`
+window, press F2 or use Play Laya to opt in; F2, Pause Laya, or holding a movement key
+returns to manual control. The controller sends verified cartridge state and legal
+actions to Laya; no remote model chooses controls. If Laya is unavailable, autonomous
+play pauses with the sidecar error visible in the live panel. The agent receives the
+current Journey milestone, but the full route is not yet an autonomous navigation plan.
+It remembers explored coordinates, failed steps, exits, and
 short factual clues per run; restoring a checkpoint restores that memory when available.
 
-Wild catches are disabled unless the ROM-verified name is outside the original 251.
+Ordinary wild encounters are passed to the battle controller with an instruction to flee;
+the full-game battle and route policy still needs end-to-end validation.
 Older species may be caught only in a static sprite encounter. The controller takes a
 checkpoint before interacting with an adjacent sprite and restores it after a failed
 static capture, up to three times. Ordinary old-species wild battles pause for manual

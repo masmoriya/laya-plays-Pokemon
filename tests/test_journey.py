@@ -56,6 +56,22 @@ def test_pagota_arrival_advances_journey_without_confirmation_and_persists(tmp_p
     resumed.close()
 
 
+def test_route_101_with_starter_repairs_opening_rival_progress():
+    route = RouteProgress()
+    state = _state(area="Route 101")
+    state.party = (SimpleNamespace(species="FLAMBEAR"),)
+    route.observe(state)
+    assert route.now == 3
+
+
+def test_pagota_checkpoint_with_starter_repairs_earlier_progress():
+    route = RouteProgress()
+    state = _state(area="Pagota City")
+    state.party = (SimpleNamespace(species="FLAMBEAR"),)
+    route.observe(state)
+    assert route.now == 4
+
+
 def test_brass_tower_floors_do_not_complete_climb_stage():
     route = RouteProgress(completed={1, 2, 3})
     for map_number in (1, 5):
@@ -186,4 +202,26 @@ def test_legacy_skewed_map_is_archived_without_erasing_route(tmp_path):
         "SELECT payload FROM journey_snapshots WHERE path LIKE '%legacy-map'"
     ).fetchone()
     assert row and '"map_version": 1' in row[0]
+    upgraded.close()
+
+
+def test_old_screen_pixel_map_is_archived_before_clean_recapture(tmp_path):
+    database = tmp_path / "journey.sqlite"
+    first = Journey("run", database)
+    first.observe_tiles(_state(), [_tile()])
+    first.observe_entities(_state(), [_entity()])
+    first.db.execute("UPDATE journey_meta SET map_version=2 WHERE run_id=?", ("run",))
+    first.db.commit()
+    first.close()
+
+    upgraded = Journey("run", database)
+    assert upgraded.tiles == {}
+    assert upgraded.entities == {}
+    archive = upgraded.db.execute(
+        "SELECT path,payload FROM journey_snapshots WHERE path LIKE '%legacy-map'"
+    ).fetchone()
+    assert archive and '"map_version": 2' in archive[1]
+    assert upgraded.restore_checkpoint(archive[0])
+    assert upgraded.tiles == {}  # old pixel maps cannot reintroduce corrupt cells
+    assert upgraded.entities == {}
     upgraded.close()

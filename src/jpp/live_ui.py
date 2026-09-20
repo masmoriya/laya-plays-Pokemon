@@ -16,6 +16,17 @@ PARTY_RECT = pygame.Rect(342, 766, 640, 238)
 RIGHT = pygame.Rect(994, 176, 422, 828)
 
 
+def _ui_font(size, *, bold=False):
+    """Pick a real local UI font; Pygame does not parse CSS font stacks."""
+    # Tahoma and Arial keep open counters and sturdy stems at the small sizes
+    # used by the dashboard.  Keep the remaining entries as portable fallbacks.
+    for family in ("Tahoma", "Arial", "Verdana", "Inter", "DejaVu Sans", "Liberation Sans"):
+        path = pygame.font.match_font(family, bold=bold)
+        if path:
+            return pygame.font.Font(path, size)
+    return pygame.font.Font(None, size)
+
+
 def format_duration(seconds):
     total = max(0, int(seconds or 0))
     hours, remainder = divmod(total, 3600)
@@ -38,12 +49,12 @@ class LiveUI:
     def __init__(self, screen, pokemon_sprites=None):
         self.screen = screen
         self.canvas = pygame.Surface(SIZE)
-        self.title = pygame.font.SysFont("Verdana,Inter,sans-serif", 24, bold=True)
-        self.body = pygame.font.SysFont("Verdana,Inter,sans-serif", 16)
-        self.body_bold = pygame.font.SysFont("Verdana,Inter,sans-serif", 16, bold=True)
-        self.small = pygame.font.SysFont("Verdana,Inter,sans-serif", 13)
-        self.small_bold = pygame.font.SysFont("Verdana,Inter,sans-serif", 14, bold=True)
-        self.tiny = pygame.font.SysFont("Verdana,Inter,sans-serif", 11)
+        self.title = _ui_font(24, bold=True)
+        self.body = _ui_font(16)
+        self.body_bold = _ui_font(16, bold=True)
+        self.small = _ui_font(13)
+        self.small_bold = _ui_font(14, bold=True)
+        self.tiny = _ui_font(11)
         self.jev_sprites = JevSprites()
         self.pokemon_sprites = pokemon_sprites
         self.timeline = JourneyTimeline(self, JourneyArt(getattr(pokemon_sprites, "rom", None)))
@@ -80,7 +91,9 @@ class LiveUI:
         dest.center = (width // 2, height // 2)
         self._dest = dest
         self.screen.fill(BG)
-        image = pygame.transform.scale(self.canvas, dest.size) if dest.size != SIZE else self.canvas
+        # Smooth scaling prevents nearest-neighbor reduction from dropping the
+        # thin opening in glyphs such as G, V, and O at small window sizes.
+        image = pygame.transform.smoothscale(self.canvas, dest.size) if dest.size != SIZE else self.canvas
         self.screen.blit(image, dest)
         pygame.display.flip()
 
@@ -101,7 +114,7 @@ class LiveUI:
         value = str(value)
         if max_width is not None:
             while value and font.size(value)[0] > max_width:
-                value = value[:-2].rstrip("…") + "…"
+                value = value[:-1].rstrip("…") + "…"
         image = font.render(value, True, color)
         rect = image.get_rect(center=pos) if center else image.get_rect(topleft=pos)
         self.canvas.blit(image, rect)
@@ -130,26 +143,39 @@ class LiveUI:
 
     def _thoughts(self, thoughts, animation, progress):
         pygame.draw.rect(self.canvas, PANEL, LEFT, border_radius=6)
-        self.text("Jev", (LEFT.x + 14, LEFT.y + 14), self.small, GOOD)
-        self.text("Live" if progress.get("jev_connected") else "Not connected",
-                  (LEFT.x + 75, LEFT.y + 14), self.small, GOOD if progress.get("jev_connected") else MUTED)
+        tactical_key = progress.get("tactical_provider", "jev")
+        tactical_label = progress.get("tactical_label", tactical_key.title())
+        tactical_status = progress.get("tactical_status")
+        if tactical_status is None:
+            tactical_status = "live" if progress.get(
+                "tactical_connected", progress.get("jev_connected")
+            ) else "not_connected"
+        status_label = {
+            "live": "Live",
+            "checking": "Checking",
+            "unavailable": "Unavailable",
+            "not_connected": "Not connected",
+        }.get(tactical_status, "Not connected")
+        status_color = GOOD if tactical_status == "live" else MUTED
+        self.text(tactical_label, (LEFT.x + 14, LEFT.y + 14), self.small, GOOD)
+        self.text(status_label, (LEFT.x + 75, LEFT.y + 14), self.small, status_color)
         self.text("Luna", (LEFT.x + 14, LEFT.y + 46), self.small, ACCENT)
         self.text("Live" if progress.get("luna_connected") else "Not connected",
                   (LEFT.x + 75, LEFT.y + 46), self.small,
                   GOOD if progress.get("luna_connected") else MUTED)
-        self._usage(progress.get("model_usage"))
+        self._usage(progress.get("model_usage"), progress.get("tactical_provider", "jev"))
         self._entries(thoughts.get("luna"), LEFT.y + 194, LEFT.y + 290)
         # Snapshot confirmation belongs with the snapshot controls, not the Jev feed.
-        jev_entries = [entry for entry in (thoughts.get("jev") or [])
+        jev_entries = [entry for entry in (thoughts.get(tactical_key) or thoughts.get("jev") or [])
                        if entry != "Snapshot saved."]
         self._entries(jev_entries, LEFT.y + 310, LEFT.bottom - 138)
         # Her avatar belongs to its own dock; it never steals commentary width.
         self.jev_sprites.draw(self.canvas, getattr(animation.state, "value", "idle"),
                               animation.frame(), pygame.Rect(LEFT.right - 104, LEFT.bottom - 124, 88, 108))
 
-    def _usage(self, model_usage):
+    def _usage(self, model_usage, tactical_provider="jev"):
         self.text("Usage", (LEFT.x + 14, LEFT.y + 78), self.tiny, MUTED)
-        for index, (name, color) in enumerate((("jev", GOOD), ("luna", ACCENT))):
+        for index, (name, color) in enumerate(((tactical_provider, GOOD), ("luna", ACCENT))):
             stats = (model_usage or {}).get(name) or {}
             top = LEFT.y + 96 + index * 48
             calls = stats.get("calls", 0)
@@ -178,9 +204,10 @@ class LiveUI:
         lines = []
         for entry in (entries or [])[-5:]:
             lines.extend(self.wrap(entry, self.body, LEFT.width - 28))
-        for line in lines[-max(1, (bottom - top) // 23):]:
+        line_height = max(23, self.body.get_linesize())
+        for line in lines[-max(1, (bottom - top) // line_height):]:
             self.text(line, (LEFT.x + 14, top), self.body, TEXT, max_width=LEFT.width - 28)
-            top += 23
+            top += line_height
 
     def _footer(self, progress, thoughts=None):
         controls = (("shortcuts", "Keys", 24, 52),
@@ -189,8 +216,9 @@ class LiveUI:
                     ("restart", "Restart", 266, 76),
                     ("game_save", "Save help", 350, 84),
                     ("toggle_audio", "Unmute" if self.audio_muted else "Mute", 442, 72))
-        if progress.get("jev_available"):
-            controls += (("toggle_jev", "Pause Jev" if progress.get("jev_auto") else "Play Jev",
+        if progress.get("tactical_available", progress.get("jev_available")):
+            label = progress.get("tactical_label", "Jev")
+            controls += (("toggle_jev", f"Pause {label}" if progress.get("tactical_auto", progress.get("jev_auto")) else f"Play {label}",
                           910, 94),)
         for action, label, x, width in controls:
             self.button(action, label, pygame.Rect(x, 1026, width, 30),

@@ -48,6 +48,18 @@ class CheckpointManager:
             )
         return states[0] if states else None
 
+    def latest_reason(self, run_id, reason):
+        """Find a protected recovery point without selecting the stuck exit save."""
+        prefix = f"{_safe_component(run_id)}-"
+        suffix = f"-{_safe_component(reason)}.state"
+        states = sorted(
+            (item for item in self.directory.glob("*.state")
+             if item.name.startswith(prefix) and item.name.endswith(suffix)),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        return states[0] if states else None
+
 
 def _safe_component(value):
     """Keep checkpoint names predictable even when run IDs are user supplied."""

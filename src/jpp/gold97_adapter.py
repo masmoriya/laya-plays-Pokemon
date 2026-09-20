@@ -25,8 +25,21 @@ BATTLE_MON = 0xC62C
 ENEMY_MON = 0xD206
 BATTLE_MODE = 0xD22D
 BATTLE_RESULT = 0xD0F3
+MENU_CURSOR_Y = 0xCFA9
+MENU_CURSOR_X = 0xCFAA
 OTHER_TRAINER_CLASS = 0xD22F
 OTHER_TRAINER_ID = 0xD231
+# Verified against the v6.1c cartridge's opening sequence. These are game
+# progress bytes, not rewards inferred from the rendered screen.
+READ_OAKS_EMAIL = 0xDAE4
+# wEventFlags begins at DA72; EVENT_TALKED_TO_KURT_AND_FALKNER is bit 268.
+KURT_FALKNER_EVENT_BYTE = 0xDA93
+KURT_FALKNER_EVENT_MASK = 0x10
+OPENING_SCENE = {3: 0xD986, 4: 0xD987, 5: 0xD988,
+                 6: 0xD989, 7: 0xD98A}
+NUM_ITEMS = 0xD892
+ITEMS = 0xD893
+POTION_ID = 0x12
 
 _TYPE_NAMES = (
     "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BIRD", "BUG",
@@ -80,6 +93,12 @@ class Gold97State:
     battle_result: int | None = None
     opponent_label: str | None = None
     opponent_trainer_class: int | None = None
+    read_oaks_email: bool = False
+    opening_scene: int | None = None
+    battle_menu_cursor: tuple[int, int] | None = None
+    potion_slot: int | None = None
+    potion_count: int = 0
+    talked_to_kurt_and_falkner: bool = False
 
     @property
     def in_battle(self) -> bool:
@@ -181,6 +200,8 @@ class Gold97Adapter:
         group, number = mem[MAP_GROUP], mem[MAP_NUMBER]
         map_ready = bool(group or number)
         label, locality, width, height = map_details(group, number)
+        potion_slot = next((slot for slot in range(min(mem[NUM_ITEMS], 20))
+                            if mem[ITEMS + slot * 2] == POTION_ID), None)
         state = Gold97State(
             group,
             number,
@@ -194,6 +215,14 @@ class Gold97Adapter:
             mem[BATTLE_RESULT] if kind == "none" else None,
             self._opponent_label(mem, kind),
             mem[OTHER_TRAINER_CLASS] if kind == "trainer" else None,
+            bool(mem[READ_OAKS_EMAIL] & 0x20),
+            mem[OPENING_SCENE[number]] if group == 20 and number in OPENING_SCENE else None,
+            ((mem[MENU_CURSOR_X], mem[MENU_CURSOR_Y]) if kind != "none" and
+             mem[MENU_CURSOR_X] in (1, 2) and mem[MENU_CURSOR_Y] in (1, 2)
+             else None),
+            potion_slot,
+            mem[ITEMS + potion_slot * 2 + 1] if potion_slot is not None else 0,
+            bool(mem[KURT_FALKNER_EVENT_BYTE] & KURT_FALKNER_EVENT_MASK),
         )
         return SimpleNamespace(
             state=state, badge_update=None, title=self.title, supports_ram_progress=True

@@ -6,8 +6,23 @@ import numpy as np
 from jpp.terrain_capture import WorldCamera, visible_background, visible_entities, visible_player
 
 
+class _Memory(defaultdict):
+    def __init__(self, sprite_updates):
+        super().__init__(int, {0xC2CE: sprite_updates, 0xFF68: 0xC0})
+        shades = (22, 10, 5, 0)
+        self.palette_data = b"".join(
+            (shade | shade << 5 | shade << 10).to_bytes(2, "little")
+            for _ in range(8) for shade in shades
+        )
+
+    def __getitem__(self, key):
+        if key == 0xFF69:
+            return self.palette_data[super().__getitem__(0xFF68) & 0x3F]
+        return super().__getitem__(key)
+
+
 def _emulator(sprite_updates=1, window=(160, 144), white=False):
-    memory = defaultdict(int, {0xC2CE: sprite_updates})
+    memory = _Memory(sprite_updates)
     for index, (x, y) in enumerate(((60, 64), (60, 72), (68, 64), (68, 72))):
         memory[0xFE00 + index * 4] = y + 16
         memory[0xFE01 + index * 4] = x + 8
@@ -17,6 +32,7 @@ def _emulator(sprite_updates=1, window=(160, 144), white=False):
                                                   ndarray=frame),
                            tilemap_background=SimpleNamespace(
                                tile_identifier=lambda x, y: 17,
+                               map_offset=0x9800,
                                tile=lambda x, y: SimpleNamespace(
                                    ndarray=lambda: np.full((8, 8, 4), 90, dtype=np.uint8))))
 
@@ -25,14 +41,16 @@ def _state(battle=False):
     return SimpleNamespace(in_battle=battle, map_width=20, map_height=26, x=8, y=8)
 
 
-def test_observed_viewport_uses_background_tiles_not_sprite_screen():
+def test_observed_viewport_decodes_background_instead_of_lagging_sprite_screen():
     emulator = _emulator()
     emulator.screen.ndarray[64:80, 60:76] = 0
     cells = visible_background(emulator, _state())
     assert len(cells) == 20 * 18
-    assert cells[0] == (8, 7, 17, bytes([180] * 256))
-    assert any((x, y, rgba) == (15, 15, bytes([180] * 256))
+    terrain = bytes((176, 176, 176, 255)) * 64
+    assert cells[0] == (8, 7, 17, terrain)
+    assert any((x, y, rgba) == (15, 15, terrain)
                for x, y, _, rgba in cells)
+    assert emulator.memory[0xFF68] == 0xC0
     moved = _state()
     moved.x = 9
     assert visible_background(_emulator(), moved)[0][:2] == (10, 7)
@@ -121,8 +139,39 @@ def test_npc_map_position_stays_fixed_during_subtile_camera_scroll():
     assert first[0].pixel_x == second[0].pixel_x
 
 
+def test_camera_waits_for_new_map_to_settle_before_terrain_capture():
+    emulator = _emulator()
+    camera = WorldCamera()
+    state = _state()
+    state.map_group, state.map_number = 9, 2
+    for expected in (1, 2, 3):
+        assert camera.position(emulator, state) is not None
+        assert camera.map_frames == expected
+    state.map_number = 3
+    assert camera.position(emulator, state) is not None
+    assert camera.map_frames == 1
+    assert camera.position(emulator, _state(battle=True)) is None
+    assert camera.map_frames == 0
+
+
 def test_background_uses_the_same_world_origin_as_the_sprite_layer():
     emulator = _emulator()
     emulator.screen.get_tilemap_position = lambda: ((8, 0), (160, 144))
     cells = visible_background(emulator, _state(), world_origin=(72, 56))
     assert cells[0][:2] == (9, 7)
+
+
+def test_background_decodes_vram_bank_flip_and_palette_without_screen_pixels():
+    emulator = _emulator()
+    emulator.memory[1, 0x9800] = 0x29  # bank 1, horizontal flip, palette 1
+    emulator.memory[1, 0x8000 + 17 * 16] = 0x80
+    cells = visible_background(emulator, _state())
+    tile = cells[0][3]
+    assert tile[:4] == bytes((176, 176, 176, 255))
+    assert tile[28:32] == bytes((80, 80, 80, 255))
+
+
+def test_uniform_transition_palette_is_not_saved_as_terrain():
+    emulator = _emulator()
+    emulator.memory.palette_data = bytes(64)
+    assert visible_background(emulator, _state()) == ()

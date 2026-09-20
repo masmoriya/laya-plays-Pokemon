@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .terrain_tiles import background_tiles
+
 
 @dataclass(frozen=True)
 class OverworldSprite:
@@ -31,8 +33,12 @@ class WorldCamera:
         self.map_key = None
         self.scroll = None
         self.origin = None
+        self.map_frames = 0
 
     def position(self, emulator, state):
+        if getattr(state, "in_battle", False):
+            self.reset()
+            return None
         view = _overworld_view(emulator, state, aligned=False)
         if view is None:
             return None
@@ -43,10 +49,12 @@ class WorldCamera:
                 return None
             self.origin = (view[3][0] * 8, view[3][1] * 8)
             self.map_key = map_key
+            self.map_frames = 1
         else:
             old_x, old_y = self.scroll
             self.origin = (self.origin[0] + (scroll_x - old_x + 128) % 256 - 128,
                            self.origin[1] + (scroll_y - old_y + 128) % 256 - 128)
+            self.map_frames += 1
         self.scroll = (scroll_x, scroll_y)
         return self.origin
 
@@ -86,84 +94,15 @@ def _overworld_view(emulator, state, *, aligned=True):
     return (scroll_x, scroll_y, frame, origin) if origin is not None else None
 
 
-def _sprite_cells(memory):
-    blocked = set()
-    for index in range(40):
-        base = 0xFE00 + index * 4
-        x, y = memory[base + 1] - 8, memory[base] - 16
-        if x <= -8 or x >= 160 or y <= -8 or y >= 144:
-            continue
-        for row in range(max(0, y // 8), min(18, (y + 7) // 8 + 1)):
-            for col in range(max(0, x // 8), min(20, (x + 7) // 8 + 1)):
-                blocked.add((col, row))
-    return blocked
-
-
-def _tile_attr(memory, tilemap, tile_x, tile_y):
-    try:
-        return memory[1, tilemap.map_offset + tile_y * 32 + tile_x]
-    except (AttributeError, TypeError):
-        return 0
-
-
 def visible_background(emulator, state, *, world_origin=None):
-    """Return visible terrain, including the background beneath sprites."""
+    """Return the real background beneath sprites, never screen pixels."""
     view = _overworld_view(emulator, state)
     if view is None:
         return ()
-    scroll_x, scroll_y, frame, (left, top) = view
+    scroll_x, scroll_y, _, (left, top) = view
     if world_origin is not None:
         left, top = world_origin[0] // 8, world_origin[1] // 8
-    blocked = _sprite_cells(emulator.memory)
-    tilemap = emulator.tilemap_background
-    samples = []
-    donors = {}
-    for row in range(18):
-        for col in range(20):
-            world_x, world_y = left + col, top + row
-            if not (0 <= world_x < state.map_width * 2
-                    and 0 <= world_y < state.map_height * 2):
-                continue
-            tile_x, tile_y = (scroll_x // 8 + col) % 32, (scroll_y // 8 + row) % 32
-            tile_id = tilemap.tile_identifier(tile_x, tile_y)
-            attr = _tile_attr(emulator.memory, tilemap, tile_x, tile_y)
-            covered = (col, row) in blocked
-            pixels = None if covered else frame[row * 8:row * 8 + 8, col * 8:col * 8 + 8, :4].copy().tobytes()
-            if pixels is not None:
-                donors.setdefault((tile_id, attr), pixels)
-            samples.append((world_x, world_y, tile_id, attr, tile_x, tile_y, pixels))
-    palettes = {}
-    result = []
-    for world_x, world_y, tile_id, attr, tile_x, tile_y, pixels in samples:
-        if pixels is None:
-            pixels = donors.get((tile_id, attr))
-            if pixels is None:
-                raw = tilemap.tile(tile_x, tile_y).ndarray()
-                palette = palettes.get(attr)
-                if palette is None:
-                    palette = _observed_palette(samples, tilemap, attr)
-                    palettes[attr] = palette
-                pixels = _recolor_tile(raw, palette)
-        result.append((world_x, world_y, tile_id, pixels))
-    return result
-
-
-def _observed_palette(samples, tilemap, attr):
-    palette = {}
-    for _, _, _, sample_attr, tile_x, tile_y, pixels in samples:
-        if sample_attr != attr or pixels is None:
-            continue
-        raw = tilemap.tile(tile_x, tile_y).ndarray().reshape(-1, 4)
-        rendered = np.frombuffer(pixels, dtype=np.uint8).reshape(-1, 4)
-        for source, color in zip(raw, rendered):
-            palette[bytes(source)] = bytes(color)
-        if len(palette) >= 4:
-            break
-    return palette
-
-
-def _recolor_tile(raw, palette):
-    return b"".join(palette.get(bytes(color), bytes(color)) for color in raw.reshape(-1, 4))
+    return background_tiles(emulator, state, scroll_x, scroll_y, left, top)
 
 
 def _vram(memory, bank, address):
