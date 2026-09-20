@@ -2,7 +2,7 @@
 
 import pygame
 
-from .live_ui_colors import ACCENT, BG, MUTED, PANEL, TEXT
+from .live_ui_colors import BG, MUTED, PANEL, TEXT, WARN
 
 
 class LiveMap:
@@ -21,7 +21,6 @@ class LiveMap:
         self.ui.text(label, (box.x + 14, box.y + 33), self.ui.body_bold, TEXT,
                      max_width=box.width - 28)
         view = pygame.Rect(box.x + 14, box.y + 64, box.width - 28, box.height - 100)
-        pygame.draw.rect(self.ui.canvas, BG, view, border_radius=4)
         self._area(state, journey, view)
         self.ui.button("map_details", "Hide" if self.ui.map_details else "Details",
                        pygame.Rect(box.x + 14, box.bottom - 30, 70, 23), MUTED)
@@ -61,7 +60,7 @@ class LiveMap:
         self.ui.canvas.blit(pygame.transform.scale(self._terrain.subsurface(source), size), target)
         previous_clip = self.ui.canvas.get_clip()
         self.ui.canvas.set_clip(view)
-        self._location_border(state, map_key, target, source, scale)
+        location = self._location_rect(state, map_key, target, source, scale)
         current = {entity.key for entity in self.ui.map_entities
                    if entity.map_key == map_key and self._in_bounds(entity, columns, rows)}
         remembered = getattr(journey, "entities", {}).get(map_key, {}) if journey else {}
@@ -74,6 +73,8 @@ class LiveMap:
         player = getattr(self.ui, "player_marker", None)
         if player and player.map_key == map_key:
             self._sprite(target, source, scale, player.pixel_x, player.pixel_y, player.rgba)
+        if location:
+            self._draw_location_border(location)
         self.ui.canvas.set_clip(previous_clip)
 
     def _source_rect(self, state, columns, rows):
@@ -81,19 +82,24 @@ class LiveMap:
         width, height = columns * 8, rows * 8
         return pygame.Rect(0, 0, width, height)
 
-    def _location_border(self, state, map_key, target, source, scale):
+    def _location_rect(self, state, map_key, target, source, scale):
         player = getattr(self.ui, "player_marker", None)
         if player and player.map_key == map_key:
             pixel_x, pixel_y = player.pixel_x, player.pixel_y
         else:
             x, y = getattr(state, "x", None), getattr(state, "y", None)
             if x is None or y is None:
-                return
+                return None
             pixel_x, pixel_y = x * 16, y * 16
         side = max(2, round(16 * scale))
         rect = pygame.Rect(target.x + round((pixel_x - source.x) * scale),
                            target.y + round((pixel_y - source.y) * scale), side, side)
-        pygame.draw.rect(self.ui.canvas, ACCENT, rect, width=max(1, round(scale)))
+        return rect.inflate(max(6, round(8 * scale)), max(6, round(8 * scale)))
+
+    def _draw_location_border(self, rect):
+        """Keep the current area readable above a busy sprite and terrain texture."""
+        pygame.draw.rect(self.ui.canvas, BG, rect, width=4)
+        pygame.draw.rect(self.ui.canvas, WARN, rect, width=2)
 
     @staticmethod
     def _opaque_surface(rgba, size):
