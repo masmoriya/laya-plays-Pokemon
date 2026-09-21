@@ -53,6 +53,12 @@ class RouteProgress:
                 and getattr(state, "party", ())):
             self.completed.update((1, 2))
         badges = len(getattr(state, "badge_ids", ()))
+        if getattr(state, "received_cut_from_bill", False):
+            self.completed.add(6)
+        if getattr(state, "route_102_tree_chopped", False):
+            self.completed.add(7)
+        if getattr(state, "route_102_rival_complete", False):
+            self.completed.add(8)
         for step, count in _BADGE_STEPS.items():
             if badges >= count:
                 self.completed.add(step)

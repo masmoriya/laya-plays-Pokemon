@@ -43,7 +43,7 @@ class Journey:
         self.entities = {}
         for map_key, entity_key, pixel_x, pixel_y, rgba in self.db.execute(
                 "SELECT map_key,entity_key,pixel_x,pixel_y,rgba FROM journey_entities WHERE run_id=?", (run_id,)):
-            if len(rgba) == 1024 and entity_key.startswith("npc:v2:"):
+            if len(rgba) == 1024 and entity_key.startswith(("npc:v2:", "object:")):
                 self.entities.setdefault(map_key, {})[entity_key] = (pixel_x, pixel_y, rgba)
         self._last_sample = None
         self.tile_revision = 0
@@ -149,7 +149,8 @@ class Journey:
                 (max(abs(x - detection.pixel_x), abs(y - detection.pixel_y)), key)
                 for key, (x, y, _) in remembered.items() if key not in claimed
             )
-            key = matches[0][1] if matches and matches[0][0] <= 24 else None
+            key = (detection.key if detection.key.startswith(("object:", "item:")) else
+                   matches[0][1] if matches and matches[0][0] <= 24 else None)
             if key is None:
                 base = f"npc:v2:{detection.pixel_x}:{detection.pixel_y}"
                 key = base
@@ -207,7 +208,7 @@ class Journey:
             for map_key, entity_key, pixel_x, pixel_y, rgba_hex in (
                     payload.get("entities", ()) if payload.get("map_version") == MAP_VERSION else ()):
                 rgba = bytes.fromhex(rgba_hex)
-                if len(rgba) != 1024 or not entity_key.startswith("npc:v2:"):
+                if len(rgba) != 1024 or not entity_key.startswith(("npc:v2:", "object:")):
                     continue
                 self.entities.setdefault(map_key, {})[entity_key] = (pixel_x, pixel_y, rgba)
                 self.db.execute("INSERT INTO journey_entities VALUES(?,?,?,?,?,?)",
