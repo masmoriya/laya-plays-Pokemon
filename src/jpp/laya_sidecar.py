@@ -7,6 +7,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .laya_config import setting
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -112,9 +113,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Run a local Laya sidecar")
     parser.add_argument("--host", default=os.environ.get("LAYA_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int, default=int(os.environ.get("LAYA_PORT", DEFAULT_PORT)))
-    parser.add_argument("--model-path", default=os.environ.get("LAYA_MODEL_PATH"))
+    parser.add_argument("--model-path", default=setting("model_path"))
     parser.add_argument("--model", default=os.environ.get("LAYA_MODEL", DEFAULT_MODEL))
-    parser.add_argument("--device", default=os.environ.get("LAYA_DEVICE"))
+    parser.add_argument("--device", default=setting("device"))
     args = parser.parse_args(argv)
     serve(LayaService(args.model_path, args.model, args.device), args.host, args.port)
 

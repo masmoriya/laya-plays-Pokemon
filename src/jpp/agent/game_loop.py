@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 FRAMES_PER_DECISION = 8
-PRESS_FRAMES = 4
+# Keep directional actions alive through the full decision window. PyBoy
+# releases a button automatically after the requested delay; menu controls
+# remain short taps so A cannot advance text repeatedly.
+PRESS_FRAMES = FRAMES_PER_DECISION
+MENU_PRESS_FRAMES = 4
 BUTTON_OPTIONS = {
     "a": "press A",
     "b": "press B",
@@ -110,7 +114,9 @@ def play(emulator, adapter, agent_policy, max_decisions, log_path=None,
             branch = GenericBranch("generic", body, BUTTON_OPTIONS)
             decision = agent_policy.decide(branch)
             if decision.option != "wait":
-                emulator.button(decision.option, PRESS_FRAMES)
+                delay = (MENU_PRESS_FRAMES if decision.option in
+                         {"a", "b", "start", "select"} else PRESS_FRAMES)
+                emulator.button(decision.option, delay)
             _advance(emulator, FRAMES_PER_DECISION, on_frame, on_audio)
             record = {
                 "t": time.time(),

@@ -38,11 +38,13 @@ class Adapter:
 
 def test_generic_agent_loop_uses_allowlisted_controls_and_logs_state(tmp_path):
     log = tmp_path / "gold.jsonl"
+    emulator = Emulator()
     records = play(
-        Emulator(), Adapter(), ProviderPolicy(_Provider()), 1, log_path=log
+        emulator, Adapter(), ProviderPolicy(_Provider()), 1, log_path=log
     )
     assert records[0]["kind"] == "generic"
     assert records[0]["state"]["pokedex"] == {"caught": 1, "seen": 2, "total": 2}
+    assert emulator.pressed == [("up", 8)]
     assert json.loads(log.read_text())["choice"] == "up"
 
 

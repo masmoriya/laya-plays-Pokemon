@@ -16,12 +16,21 @@ from jpp.gold97_adapter import (
     BATTLE_MODE,
     BATTLE_MON,
     ENEMY_MON,
+    MENU_CURSOR_X,
+    MENU_CURSOR_Y,
     OTHER_TRAINER_CLASS,
     OTHER_TRAINER_ID,
     READ_OAKS_EMAIL,
     OPENING_SCENE,
+    MONEY,
+    NUM_BALLS,
+    BALLS,
+    POKE_BALL_ID,
+    LAST_SPAWN_MAP_GROUP,
+    LAST_SPAWN_MAP_NUMBER,
     Gold97Adapter,
 )
+from jpp.agent.gold97_screen import TILEMAP, battle_menu, visible_rows
 from jpp.gold97_data import NAME_WIDTH, Gold97RomData
 from jpp.progress import ProgressTracker
 from jpp.pokemon_sprites import PokemonSprites
@@ -46,6 +55,52 @@ def test_rom_table_reads_reforged_names(tmp_path):
     assert data.name(152) == "CHIKORITA"
     assert data.name(155) == "FLAMBEAR"
     assert data.name(158) == "CRUIZE"
+
+
+def test_bill_reward_event_is_gated_by_verified_rom(tmp_path):
+    from jpp.gold97_adapter import GOT_CUT_EVENT_BYTE, GOT_CUT_EVENT_MASK
+    from jpp.route_progress import RouteProgress
+
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    emulator = type("Emulator", (), {"memory": memory})()
+    memory[GOT_CUT_EVENT_BYTE] = GOT_CUT_EVENT_MASK
+    assert not adapter.snapshot(emulator).state.received_cut_from_bill
+    adapter.mechanics_verified = True  # Exercise exact-build decoding independently.
+    state = adapter.snapshot(emulator).state
+    assert state.received_cut_from_bill
+    route = RouteProgress(set(range(1, 6)))
+    route.observe(state)
+    assert route.now == 7
+    memory[GOT_CUT_EVENT_BYTE] = 0
+    assert not adapter.snapshot(emulator).state.received_cut_from_bill
+
+
+def test_route_102_story_events_advance_the_journey_only_on_verified_rom(tmp_path):
+    from jpp.gold97_adapter import (
+        ROUTE_102_RIVAL_EVENT_BYTE,
+        ROUTE_102_RIVAL_EVENT_MASK,
+        ROUTE_102_TREE_CHOPPED_EVENT_BYTE,
+        ROUTE_102_TREE_CHOPPED_EVENT_MASK,
+    )
+    from jpp.route_progress import RouteProgress
+
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    emulator = type("Emulator", (), {"memory": memory})()
+    memory[ROUTE_102_TREE_CHOPPED_EVENT_BYTE] |= ROUTE_102_TREE_CHOPPED_EVENT_MASK
+    memory[ROUTE_102_RIVAL_EVENT_BYTE] |= ROUTE_102_RIVAL_EVENT_MASK
+    unverified = adapter.snapshot(emulator).state
+    assert not unverified.route_102_tree_chopped
+    assert not unverified.route_102_rival_complete
+
+    adapter.mechanics_verified = True
+    state = adapter.snapshot(emulator).state
+    assert state.route_102_tree_chopped
+    assert state.route_102_rival_complete
+    route = RouteProgress(set(range(1, 7)))
+    route.observe(state)
+    assert route.now == 9
 
 
 def test_adapter_reads_party_badges_and_pokedex(tmp_path):
@@ -92,6 +147,70 @@ def test_adapter_exposes_opening_progress_from_verified_ram(tmp_path):
     state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
     assert state.read_oaks_email
     assert state.opening_scene == 1
+
+
+def test_adapter_reads_money_and_poke_balls_from_verified_ram(tmp_path):
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[MONEY:MONEY + 3] = bytes((0x00, 0x30, 0x39))
+    memory[NUM_BALLS] = 1
+    memory[BALLS] = POKE_BALL_ID
+    memory[BALLS + 1] = 3
+    memory[LAST_SPAWN_MAP_GROUP], memory[LAST_SPAWN_MAP_NUMBER] = 9, 2
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert state.money == 12345
+    assert state.poke_ball_count == 3
+    assert state.last_spawn_map == (9, 2)
+
+
+def test_visible_battle_text_ignores_stale_generic_menu_cursor(tmp_path):
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[BATTLE_MODE] = 2
+    memory[MENU_CURSOR_X], memory[MENU_CURSOR_Y] = 1, 4
+    for col, char in enumerate("SUPER EFFECTIVE"):
+        memory[TILEMAP + 14 * 20 + col] = 0x7F if char == " " else 0x80 + ord(char) - 65
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert state.battle_menu_kind == "text"
+    assert state.battle_menu_cursor is None
+
+
+def test_visible_battle_command_cursor_overrides_stale_generic_cursor(tmp_path):
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[BATTLE_MODE] = 2
+    memory[MENU_CURSOR_X], memory[MENU_CURSOR_Y] = 1, 4
+    for row, col, label in ((14, 10, "FIGHT"), (16, 10, "PACK")):
+        for offset, char in enumerate(label):
+            memory[TILEMAP + row * 20 + col + offset] = 0x80 + ord(char) - 65
+    memory[TILEMAP + 16 * 20 + 9] = 0xED
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert state.battle_menu_kind == "command"
+    assert state.battle_menu_cursor == (1, 2)
+
+
+def test_visible_party_cursor_is_decoded_even_when_faint_message_is_open(tmp_path):
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[BATTLE_MODE] = 2
+    chars = {chr(65 + i): 0x80 + i for i in range(26)}
+    for row, text in ((1, "TANGTRIP    0  26"), (2, "FNT 8"),
+                      (3, "HOPPIP      0  26"), (4, "FNT 8"),
+                      (5, "VOLBEAR    53  53"), (6, "18"),
+                      (7, "CANCEL"), (14, "There  no will to"),
+                      (16, "battle.")):
+        for col, char in enumerate(text):
+            memory[TILEMAP + row * 20 + col + (3 if row < 7 else 1)] = (
+                0x7F if char == " " else (
+                    0xF6 + int(char) if char.isdigit() else
+                    (0xE7 if char == "." else
+                     0xE6 if char == "?" else chars[char.upper()])
+                )
+            )
+    memory[TILEMAP + 3 * 20] = 0xEC  # blinking party cursor, not the stale RAM cursor
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert state.battle_menu_kind == "party"
+    assert state.battle_menu_cursor == (1, 2)
 
 
 def test_adapter_uses_party_species_list_when_struct_header_lags(tmp_path):
@@ -176,10 +295,12 @@ def test_held_item_and_battle_moves_pp_are_decoded(tmp_path):
     memory[BATTLE_MON + 13] = 5
     memory[BATTLE_MON + 16:BATTLE_MON + 20] = b"\0\x14\0\x14"
     memory[ENEMY_MON] = 1
+    memory[MENU_CURSOR_X], memory[MENU_CURSOR_Y] = 1, 3
     state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
     assert state.party[0].held_item == "Potion"
     assert state.party[0].moves == ("Tackle",)
     assert state.battle.active.pp == (12,)
+    assert state.battle_menu_cursor == (1, 3)
 
 
 def test_move_pp_keeps_its_slot_and_incomplete_opponents_stay_unknown(tmp_path):
@@ -225,6 +346,19 @@ def test_reforged_rom_resolves_multiple_trainer_names():
     portrait = PokemonSprites(rom).trainer_frame(0x36)
     assert portrait is not None and portrait.get_size() == (56, 56)
     assert portrait.get_at((0, 0)).a == 255
+
+
+def test_reforged_rom_resolves_all_pokedex_entry_blocks():
+    rom = Path(__file__).resolve().parents[1] / "Gold 97 Reforged v6.1c.gbc"
+    if not rom.is_file():
+        pytest.skip("local Reforged cartridge unavailable")
+    data = Gold97RomData.from_path(rom)
+    assert len(data._pokedex_offsets()) == 253
+    assert all(data.species_data(index).entry for index in range(1, 254))
+    hoppip = data.species_data(187)
+    assert hoppip and hoppip.entry and "blown away by the wind" in hoppip.entry
+    final = data.species_data(253)
+    assert final and final.entry and len(final.entry) < 200
 
 
 def test_loading_another_timeline_drops_previous_party_fallback(tmp_path):

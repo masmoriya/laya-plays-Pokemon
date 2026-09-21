@@ -4,19 +4,24 @@ import json
 import sqlite3
 
 
-NAVIGATION_VERSION = 2
+NAVIGATION_VERSION = 4
 
 
 def _migrate_world(world):
-    """Drop pre-v2 blocked edges recorded before the cartridge hold fix."""
+    """Drop movement evidence recorded before coordinate validation."""
     if not isinstance(world, dict):
         world = {}
     world.setdefault("maps", {})
     world.setdefault("facts", [])
     if int(world.get("navigation_version", 1) or 1) < NAVIGATION_VERSION:
+        previous = int(world.get('navigation_version', 1) or 1)
         for area in world["maps"].values():
             if isinstance(area, dict):
+                if area.get('blocked'):
+                    area['legacy_blocked'] = area['blocked']
                 area["blocked"] = []
+                if previous < 3:
+                    area["edges"] = []
         world["navigation_version"] = NAVIGATION_VERSION
     return world
 
@@ -48,6 +53,13 @@ class Gold97Memory:
 
     def move_result(self, key, origin, direction, destination):
         area = self.map(key)
+        delta = (destination[0] - origin[0], destination[1] - origin[1])
+        steps = {"up": (0, -1), "down": (0, 1),
+                 "left": (-1, 0), "right": (1, 0)}
+        if destination != origin and delta != steps.get(direction):
+            # Drift, scripted movement and warps do not prove the requested edge.
+            self.visited(key, destination)
+            return
         edge = [list(origin), direction]
         field = "edges" if destination != origin else "blocked"
         other = "blocked" if destination != origin else "edges"
@@ -95,12 +107,20 @@ class Gold97Memory:
                               (self.run_id, str(path))).fetchone()
         if row is None:
             return False
+        enabled = self.world.get("journey_strategy", {}).get("enabled")
         self.world = _migrate_world(json.loads(row[0]))
+        if enabled is not None:
+            from .journey_knowledge import knowledge
+            knowledge(self)["enabled"] = enabled
         self.save()
         return True
 
     def reset(self):
+        enabled = self.world.get("journey_strategy", {}).get("enabled")
         self.world = {"maps": {}, "facts": [], "navigation_version": NAVIGATION_VERSION}
+        if enabled is not None:
+            from .journey_knowledge import knowledge
+            knowledge(self)["enabled"] = enabled
         self.save()
 
     def close(self):

@@ -64,3 +64,8 @@ def item_name(item_id):
 
 def move_name(move_id):
     return _names("moves").get(move_id, f"Move {move_id:02X}")
+
+
+def move_names():
+    """Known cartridge move labels for recognizing level-up dialogue."""
+    return tuple(_names("moves").values())

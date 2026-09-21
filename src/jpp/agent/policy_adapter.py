@@ -33,6 +33,7 @@ class ProviderPolicy:
                 latency_ms=answer.get("latency_ms") or round((time.monotonic() - started) * 1000, 1),
                 request_made=answer.get("request_made", True),
                 model=getattr(self.provider, "model", "provider"),
+                model_input=answer.get("model_input"),
             )
         except Exception as exc:
             return Decision(

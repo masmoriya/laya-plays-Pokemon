@@ -4,8 +4,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from .decode import Battle, Mon
-from .gold97_data import Gold97RomData
-from .gold97_catalog import map_details, item_name, move_name
+from .agent.gold97_mechanics import compatible
+from .gold97_battle_state import decode_mon
+from .gold97_data import Gold97RomData, _decode_name
+from .gold97_catalog import map_details
+from .agent.gold97_screen import battle_menu, cursor_cell, visible_rows, _party_cursor
 
 
 # Gold 97 Reforged adds five bytes before the Crystal map/party block. These
@@ -21,10 +24,11 @@ MAP_GROUP = 0xDCBA
 MAP_NUMBER = 0xDCBB
 Y_COORD = 0xDCBC
 X_COORD = 0xDCBD
+CUR_BATTLE_MON = 0xD0D4
 BATTLE_MON = 0xC62C
 ENEMY_MON = 0xD206
 BATTLE_MODE = 0xD22D
-BATTLE_RESULT = 0xD0F3
+BATTLE_RESULT = 0xD0EE  # battle scratch RAM does not share the party block shift
 MENU_CURSOR_Y = 0xCFA9
 MENU_CURSOR_X = 0xCFAA
 OTHER_TRAINER_CLASS = 0xD22F
@@ -35,26 +39,41 @@ READ_OAKS_EMAIL = 0xDAE4
 # wEventFlags begins at DA72; EVENT_TALKED_TO_KURT_AND_FALKNER is bit 268.
 KURT_FALKNER_EVENT_BYTE = 0xDA93
 KURT_FALKNER_EVENT_MASK = 0x10
+# Pinned event_flags.asm: EVENT_GOT_HM01_CUT is bit 16 of wEventFlags.
+# BillsFamilysHouse.asm sets it after the HM gift; only decode the exact build.
+GOT_CUT_EVENT_BYTE = 0xDA74
+GOT_CUT_EVENT_MASK = 0x01
+# Pinned event_flags.asm: EVENT_ROUTE36_TREE_CHOPPED is bit 270. Route102.asm
+# sets it only after the Cut-gated gardener clears the Route 102 obstruction.
+ROUTE_102_TREE_CHOPPED_EVENT_BYTE = 0xDA93
+ROUTE_102_TREE_CHOPPED_EVENT_MASK = 0x40
+# Route102.asm sets EVENT_ROUTE_102_SILVER after the scripted rival sequence.
+ROUTE_102_RIVAL_EVENT_BYTE = 0xDAAE
+ROUTE_102_RIVAL_EVENT_MASK = 0x80
 OPENING_SCENE = {3: 0xD986, 4: 0xD987, 5: 0xD988,
                  6: 0xD989, 7: 0xD98A}
 NUM_ITEMS = 0xD892
 ITEMS = 0xD893
 POTION_ID = 0x12
+MONEY = 0xD84E
+NUM_BALLS = 0xD8D7
+BALLS = 0xD8D8
+POKE_BALL_ID = 0x05
+LAST_SPAWN_MAP_GROUP = 0xDCB7
+LAST_SPAWN_MAP_NUMBER = 0xDCB8
 
-_TYPE_NAMES = (
-    "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BIRD", "BUG",
-    "DRAGON", "DARK", "STEEL", *("UNKNOWN",) * 10,
-    "FIRE", "WATER", "GRASS", "ELECTRIC", "PSYCHIC", "ICE", "GHOST",
-)
+def _u24(mem, address: int) -> int:
+    """Crystal stores money as a big-endian binary quantity, not BCD."""
+    return (mem[address] << 16) | (mem[address + 1] << 8) | mem[address + 2]
 
 
-def _u16(mem, address: int) -> int:
-    return (mem[address] << 8) | mem[address + 1]
-
-
-def _types(*identifiers):
-    values = tuple(_TYPE_NAMES[value] if value < len(_TYPE_NAMES) else "UNKNOWN" for value in identifiers)
-    return tuple(dict.fromkeys(values))
+def _inventory_quantity(mem, address: int, count_address: int, item_id: int) -> int:
+    """Read the dedicated Gen 2 ball pocket without treating empty bytes as items."""
+    count = min(mem[count_address], 12)
+    for slot in range(count):
+        if mem[address + slot * 2] == item_id:
+            return mem[address + slot * 2 + 1]
+    return 0
 
 
 class Gold97Memory:
@@ -99,6 +118,29 @@ class Gold97State:
     potion_slot: int | None = None
     potion_count: int = 0
     talked_to_kurt_and_falkner: bool = False
+    money: int | None = None
+    poke_ball_count: int | None = None
+    battle_menu_kind: str | None = None
+    screen_lines: tuple[str, ...] = ()
+    last_spawn_map: tuple[int, int] | None = None
+    screen_cursor: tuple[int, int] | None = None
+
+    active_slot: int | None = None  # zero-based, validated against party
+    mechanics_verified: bool = False
+    upcoming_opponent: Mon | None = None
+    received_cut_from_bill: bool = False
+    route_102_tree_chopped: bool = False
+    route_102_rival_complete: bool = False
+    map_exits: tuple = ()
+    frame_number: int = 0
+    box_roster: tuple = ()
+    storage_verified: bool = False
+    current_box: int | None = None
+    party_cursor: int | None = None
+    pc_selection: int | None = None
+    box_names: tuple = ()
+    battle_participants: int | None = None
+    overworld_objects: tuple | None = None
 
     @property
     def in_battle(self) -> bool:
@@ -111,32 +153,19 @@ class Gold97Adapter:
 
     def __init__(self, path, data=None):
         self.data = data or Gold97RomData.from_path(path)
+        self.mechanics_verified = compatible(self.data.rom)
         self._last_party: tuple[Mon, ...] = ()
         self._pending_starter = None
 
     def reset_transition(self):
         """Drop the preceding timeline's party when a different state is loaded."""
         self._last_party = ()
+        self._storage = ((), False, None)
         self._pending_starter = None
 
-    def _mon(self, mem, base: int, slot: int, battle=False, species_id=None) -> Mon:
-        species = mem[base] if species_id is None else species_id
-        if battle:
-            level, status, hp, max_hp = mem[base + 13], mem[base + 14], _u16(mem, base + 16), _u16(mem, base + 18)
-            types = _types(*(mem[base + offset] for offset in (30, 31)))
-            indices = tuple(i for i in range(4) if mem[base + 2 + i])
-            moves = tuple(move_name(mem[base + 2 + i]) for i in indices)
-            pp = tuple(mem[base + 8 + i] & 0x3f for i in indices)
-        else:
-            level, status, hp, max_hp = mem[base + 31], mem[base + 32], _u16(mem, base + 34), _u16(mem, base + 36)
-            types = ("UNKNOWN",)
-            indices = tuple(i for i in range(4) if mem[base + 2 + i])
-            moves = tuple(move_name(mem[base + 2 + i]) for i in indices)
-            pp = tuple(mem[base + 23 + i] & 0x3f for i in indices)
-        return Mon(slot=slot, species=self.data.name(species), level=level, hp=hp, max_hp=max_hp,
-                   status="status" if status else "none", types=types, moves=moves, pp=pp,
-                   held_item=item_name(mem[base + 1]) if not battle else None,
-                   species_id=species, species_data=self.data.species_data(species))
+    def _mon(self, mem, base, slot, battle=False, species_id=None):
+        return decode_mon(self.data, mem, base, slot, battle, species_id,
+                          self.mechanics_verified)
 
     def snapshot(self, emulator):
         mem = Gold97Memory(emulator.memory)
@@ -179,6 +208,12 @@ class Gold97Adapter:
             self._last_party = tuple(party)
         mode = mem[BATTLE_MODE]
         kind = {1: "wild", 2: "trainer"}.get(mode, "none")
+        screen_lines, screen_tiles = visible_rows(mem)
+        menu_kind, visible_cursor = battle_menu(screen_lines, screen_tiles)
+        legacy_cursor = ((mem[MENU_CURSOR_X], mem[MENU_CURSOR_Y])
+                         if mem[MENU_CURSOR_X] in (1, 2)
+                         and 1 <= mem[MENU_CURSOR_Y] <= 4 else None)
+        cursor = (visible_cursor if menu_kind else legacy_cursor) if kind != "none" else None
         def battle_mon(address):
             species_id = mem[address]
             if not 0 < species_id < len(self.data.names):
@@ -202,6 +237,15 @@ class Gold97Adapter:
         label, locality, width, height = map_details(group, number)
         potion_slot = next((slot for slot in range(min(mem[NUM_ITEMS], 20))
                             if mem[ITEMS + slot * 2] == POTION_ID), None)
+        money = _u24(mem, MONEY)
+        ball_count = _inventory_quantity(mem, BALLS, NUM_BALLS, POKE_BALL_ID)
+        from .gold97_world import active_objects
+        from .gold97_exits import map_exits
+        from .gold97_storage import storage
+        # SRAM is sampled only outside battles; cache the stable roster during combat.
+        if self.mechanics_verified and kind == 'none':
+            self._storage = storage(self.data, emulator.memory)
+        boxes, storage_ok, current_box = getattr(self, '_storage', ((), False, None))
         state = Gold97State(
             group,
             number,
@@ -217,12 +261,40 @@ class Gold97Adapter:
             mem[OTHER_TRAINER_CLASS] if kind == "trainer" else None,
             bool(mem[READ_OAKS_EMAIL] & 0x20),
             mem[OPENING_SCENE[number]] if group == 20 and number in OPENING_SCENE else None,
-            ((mem[MENU_CURSOR_X], mem[MENU_CURSOR_Y]) if kind != "none" and
-             mem[MENU_CURSOR_X] in (1, 2) and mem[MENU_CURSOR_Y] in (1, 2)
-             else None),
+            cursor,
             potion_slot,
             mem[ITEMS + potion_slot * 2 + 1] if potion_slot is not None else 0,
             bool(mem[KURT_FALKNER_EVENT_BYTE] & KURT_FALKNER_EVENT_MASK),
+            money,
+            ball_count,
+            menu_kind if kind != "none" else None,
+            screen_lines,
+            ((mem[LAST_SPAWN_MAP_GROUP], mem[LAST_SPAWN_MAP_NUMBER])
+             if mem[LAST_SPAWN_MAP_GROUP] or mem[LAST_SPAWN_MAP_NUMBER] else None),
+            cursor_cell(screen_tiles),
+            (mem[CUR_BATTLE_MON] if self.mechanics_verified and battle.active
+             and mem[CUR_BATTLE_MON] < len(party)
+             and party[mem[CUR_BATTLE_MON]].species_id == battle.active.species_id
+             else None),
+            self.mechanics_verified,
+            (battle.opponent if self.mechanics_verified and menu_kind == 'switch_prompt'
+             and battle.opponent and battle.opponent.hp > 0 else None),
+            bool(self.mechanics_verified and mem[GOT_CUT_EVENT_BYTE] & GOT_CUT_EVENT_MASK),
+            bool(self.mechanics_verified and
+                 mem[ROUTE_102_TREE_CHOPPED_EVENT_BYTE] & ROUTE_102_TREE_CHOPPED_EVENT_MASK),
+            bool(self.mechanics_verified and
+                 mem[ROUTE_102_RIVAL_EVENT_BYTE] & ROUTE_102_RIVAL_EVENT_MASK),
+            map_exits(self.data, mem, width, height) if self.mechanics_verified else (),
+            getattr(emulator, "frame_count", 0),
+            box_roster=boxes, storage_verified=storage_ok, current_box=current_box,
+            party_cursor=_party_cursor(screen_lines, screen_tiles),
+            pc_selection=(mem[0xCB2A] + mem[0xCB2B] if self.mechanics_verified and
+                          any('CANCEL' in line for line in screen_lines) and
+                          mem[0xCB2A] + mem[0xCB2B] <= 20 else None),
+            box_names=tuple(_decode_name(
+                bytes(mem[0xDB79 + i * 9 + j] for j in range(9))) for i in range(14)) if self.mechanics_verified else (),
+            battle_participants=mem[0xC664] & 63 if self.mechanics_verified and kind != 'none' else None,
+            overworld_objects=active_objects(mem, width, height) if self.mechanics_verified and kind == 'none' else None,
         )
         return SimpleNamespace(
             state=state, badge_update=None, title=self.title, supports_ram_progress=True

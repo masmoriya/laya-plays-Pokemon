@@ -8,10 +8,28 @@ import time
 from pathlib import Path
 
 
+SCREEN_PROMPT = (
+    "Describe only the visible Game Boy screen. Return a JSON object with "
+    "screen_text (array of literal visible text lines), mode (battle, menu, "
+    "dialogue, overworld, or unknown), walkable_directions (up/down/left/right "
+    "only for adjacent visibly open ground beside the player sprite on an "
+    "overworld map; otherwise []), and uncertainty (short text). "
+    "Do not choose an action, infer hidden game state, or run tools."
+)
+
+
 class LunaScreenReader:
-    def __init__(self, model=None, timeout=30):
+    def __init__(self, model=None, timeout=60):
         self.model = model or os.environ.get("CODEX_MODEL", "gpt-5.6-luna")
         self.timeout = timeout
+
+    def model_input(self, frame):
+        height, width = frame.shape[:2]
+        return {
+            "model": self.model,
+            "prompt": SCREEN_PROMPT,
+            "image": {"width": int(width), "height": int(height), "source": "Game Boy frame"},
+        }
 
     def describe(self, frame):
         import pygame
@@ -26,24 +44,23 @@ class LunaScreenReader:
                     "screen_text": {"type": "array", "items": {"type": "string"}},
                     "mode": {"type": "string", "enum": ["battle", "menu", "dialogue",
                                                       "overworld", "unknown"]},
+                    "walkable_directions": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["up", "down", "left", "right"]},
+                    },
                     "uncertainty": {"type": "string"},
                 },
-                "required": ["screen_text", "mode", "uncertainty"],
+                "required": ["screen_text", "mode", "walkable_directions", "uncertainty"],
             }))
             image = pygame.surfarray.make_surface(frame.swapaxes(0, 1)[:, :, :3])
             pygame.image.save(image, str(path))
-            prompt = (
-                "Describe only the visible Game Boy screen. Return a JSON object with "
-                "screen_text (array of literal visible text lines), mode (battle, menu, "
-                "dialogue, overworld, or unknown), and uncertainty (short text). "
-                "Do not choose an action, infer hidden game state, or run tools."
-            )
             result = subprocess.run(
                 ["codex", "exec", "--ephemeral", "--json", "--sandbox", "read-only",
+                 "--skip-git-repo-check",
                  "--output-schema", str(schema),
                  "--model", self.model, "--image", str(path)],
-                input=prompt, capture_output=True, text=True,
-                timeout=self.timeout, check=False,
+                input=SCREEN_PROMPT, capture_output=True, text=True,
+                timeout=self.timeout, check=False, cwd=directory,
             )
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or "Luna screen reading failed")
@@ -67,8 +84,14 @@ class LunaScreenReader:
                 continue
         if value is not None:
             usage["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
+            directions = value.get("walkable_directions", ())
+            if not isinstance(directions, (list, tuple)):
+                directions = ()
             return {"mode": value["mode"],
                     "screen_text": value["screen_text"][:12],
+                    "walkable_directions": [direction for direction in directions
+                                            if direction in {"up", "down", "left", "right"}]
+                    if value["mode"] == "overworld" else [],
                     "uncertainty": str(value.get("uncertainty", ""))[:120],
                     "usage": usage}
         raise ValueError("Luna returned no valid screen description")

@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from ...policy import Policy
+from ...policy import Policy, questions_for
 
 
 class JevProvider:
@@ -22,7 +22,12 @@ class JevProvider:
                 "output_tokens": decision.output_tokens,
                 "total_tokens": decision.total_tokens,
                 "actual_cost_usd": decision.actual_cost_usd,
-                "commentary": ""}
+                "commentary": "",
+                "model_input": {
+                    "model": self.policy.client.model,
+                    "state": state,
+                    "questions": questions_for(branch),
+                }}
 
     def decide_strategy(self, state, memory):
         return {"objective": state.get("objective", "Continue current route")}

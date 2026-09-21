@@ -1,12 +1,27 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import URLError
 
 import pytest
 
 from jpp.agent.factory import provider_from_env
 from jpp.agent.providers.laya_provider import LayaProvider
 from jpp.laya_sidecar import _questions
+
+
+@pytest.fixture(autouse=True)
+def isolated_machine_config(monkeypatch, tmp_path):
+    monkeypatch.setattr('jpp.laya_config.CONFIG', tmp_path / 'laya.local.json')
+
+
+def test_local_external_checkpoint_setting_and_environment_override(monkeypatch, tmp_path):
+    from jpp.laya_config import setting
+    monkeypatch.delenv('LAYA_MODEL_PATH', raising=False)
+    (tmp_path / 'laya.local.json').write_text(json.dumps({'model_path': '/Volumes/external/laya'}))
+    assert setting('model_path') == '/Volumes/external/laya'
+    monkeypatch.setenv('LAYA_MODEL_PATH', '/tmp/explicit-model')
+    assert setting('model_path') == '/tmp/explicit-model'
 
 
 def _sidecar(response, status=200):
@@ -54,6 +69,10 @@ def test_laya_provider_translates_closed_set_response():
     assert answer["action"] == "move_a"
     assert answer["actual_cost_usd"] == 0.0
     assert provider.model == "laya-rl-agent"
+    assert answer["model_input"] == {
+        "state": {"decision_kind": "battle"},
+        "questions": _questions({"move_a": "safe", "move_b": "risky"}),
+    }
 
 
 def test_laya_provider_accepts_low_confidence_legal_choice_by_default():
@@ -77,6 +96,7 @@ def test_laya_provider_advances_single_legal_action_without_sidecar_call():
     assert answer["action"] == "a"
     assert answer["request_made"] is False
     assert answer["total_tokens"] == 0
+    assert "model_input" not in answer
 
 
 @pytest.mark.parametrize("response", [
@@ -162,6 +182,62 @@ def test_laya_provider_reads_sidecar_health():
         assert LayaProvider(url=url).health() == {"status": "ok", "model": "multilingual"}
     finally:
         server.shutdown()
+
+
+def test_laya_provider_uses_sidecar_host_and_port_env(monkeypatch):
+    monkeypatch.delenv("LAYA_BASE_URL", raising=False)
+    monkeypatch.setenv("LAYA_HOST", "127.0.0.1")
+    monkeypatch.setenv("LAYA_PORT", "9876")
+    assert LayaProvider().url == "http://127.0.0.1:9876"
+
+
+def test_laya_health_explains_missing_checkpoint(monkeypatch):
+    monkeypatch.delenv("LAYA_MODEL_PATH", raising=False)
+    provider = LayaProvider(url="http://127.0.0.1:1", timeout=0.01)
+    with pytest.raises(RuntimeError, match="LAYA_MODEL_PATH"):
+        provider.health()
+
+
+def test_laya_health_can_start_a_configured_local_sidecar(monkeypatch):
+    class Process:
+        def __init__(self):
+            self.command = None
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    process = Process()
+    monkeypatch.setenv("LAYA_MODEL_PATH", "/tmp/laya-model")
+    monkeypatch.setenv("LAYA_STARTUP_TIMEOUT_S", "0.1")
+    provider = LayaProvider(url="http://127.0.0.1:9876", timeout=0.01)
+    responses = iter([URLError(ConnectionRefusedError("connection refused")),
+                      {"status": "ok", "model": "multilingual"},
+                      {"status": "ok", "model": "multilingual"}])
+
+    def health_request():
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(provider, "_health_request", health_request)
+
+    def start(command, **kwargs):
+        process.command = command
+        return process
+
+    monkeypatch.setattr("jpp.agent.providers.laya_provider.subprocess.Popen", start)
+    assert provider.health() == {"status": "ok", "model": "multilingual"}
+    assert process.command[-2:] == ["--model-path", "/tmp/laya-model"]
+    provider.close()
+    assert process.terminated
 
 
 def test_laya_sidecar_builds_one_closed_set_choice_question():

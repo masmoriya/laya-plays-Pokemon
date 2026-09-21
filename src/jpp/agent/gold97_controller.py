@@ -1,13 +1,34 @@
 """Gold 97's closed-set controller shared by live and headless play."""
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from time import monotonic
 
 from .gold97_memory import Gold97Memory
-from .gold97_navigation import frontier_step
-from .gold97_opening import Gold97Opening
+from .gold97_dialogue import DialogueProgress
+from .gold97_playback import Playback
+from .gold97_training import Training
+from .gold97_party import PartyReorder
+from .gold97_roster_service import RosterService
+from .gold97_rewards import RewardLedger
+from .gold97_policy_config import reward_weights
+from ..live_map_state import LiveMapState
+from .journey_strategy import JourneyStrategy
+from .gold97_map_probe import probe_options
+from .gold97_items import item_action, is_item_entity, item_cell
+from .gold97_navigation import MovementHistory, frontier_step
+from .gold97_opening import Gold97Opening, _route
 from .gold97_journey_nav import journey_step
+from .gold97_battle import Gold97BattleStrategy
+from .gold97_battle_executor import BattleExecutor
+from .gold97_learning import learning_menu_step, proposed_move
 from .gold97_state import decision_state
 from .gold97_vision import LunaScreenReader
+from .gold97_services import (
+    center_retreat_target, center_target, is_center, is_mart,
+    mart_target, needs_healing, novel_capture, nurse_target, should_buy_balls,
+)
+from .gold97_shopping import mart_menu_step
 from ..route_progress import MAIN, RouteProgress
 from .old_species import hack_exclusive
 from .policy_adapter import ProviderPolicy
@@ -22,23 +43,42 @@ _REVERSE = {"up": "down", "down": "up", "left": "right", "right": "left"}
 # The ROM's verified Players House 2F warp is the only map-specific guard here;
 # it gets the fresh run out of the starting room without prescribing the story.
 _KNOWN_EXITS = {(0x14, 0x07): (7, 1)}
+_WAIT_LIMIT = 3
+_MAX_CAPTURE_ATTEMPTS = 3
+
+
+def _visible_prompt(state):
+    """A missing overworld view alone does not mean a dialogue is open."""
+    lines = getattr(state, "screen_lines", ()) or ()
+    return (any(line.strip() for line in lines[12:]) or
+            (getattr(state, "screen_cursor", None) is not None and
+             any(line.strip() for line in lines)))
 
 
 class Gold97Controller:
     def __init__(self, run_id, *, database="data/jev.sqlite", policy=None,
                  vision=None, vision_enabled=True, save_encounter=None,
-                 restore_encounter=None, restore_stuck=None):
+                 restore_encounter=None, restore_stuck=None, strategy_provider=None):
         self.memory = Gold97Memory(run_id, database)
+        self.dialogue = DialogueProgress()
+        self.playback = Playback(self.memory)
+        self.rewards = RewardLedger(self.memory, reward_weights())
+        self.map_state = LiveMapState()
+        self.training = Training(self.memory)
+        self.party_reorder = PartyReorder()
+        self.roster_service = RosterService(self)
         self.opening = Gold97Opening()
         self.route = RouteProgress.from_dict(self.memory.world.get("route"))
         self.opening_goal = None
+        self.navigation_target = None
         self.policy = policy or ProviderPolicy(JevProvider())
         self.vision = vision if vision is not None else (LunaScreenReader() if vision_enabled else None)
         self.save_encounter = save_encounter
         self.restore_encounter = restore_encounter
         self.restore_stuck = restore_stuck
         self.stuck_restores = 0
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        # A slow screen read or health check must not queue walking decisions.
+        self.executor = ThreadPoolExecutor(max_workers=3)
         self.vision_future = None
         self.decision_future = None
         self.decision_key = None
@@ -47,6 +87,7 @@ class Gold97Controller:
         self.last = None
         self.cooldown = 0
         self.stalls = 0
+        self.movement_history = MovementHistory()
         self.replans_at = {}
         self.unknown_frames = 0
         self.no_options_frames = 0
@@ -57,17 +98,40 @@ class Gold97Controller:
         self.attempts = {}
         self.title_bootstrap_done = False
         self.last_decision = None
+        self.latest_model_input = None
         self.last_battle = None
         self.healing = None
+        self.recovery = None
+        self.shopping = None
+        self.shopping_skip = set()
+        self.capture = None
+        self.wait_streak = 0
         self.terrain = None
         self.usage = UsageTotals()
         self.held_action = None
         self.last_move_direction = None
         self.interaction_positions = set()
+        self.interaction_map_key = None
+        self.attempted_items = set()
+        self.battle_strategy = Gold97BattleStrategy()
+        self.battle_executor = BattleExecutor()
+        self.wild_battle_committed = False
+        self.battle_phase = None
+        self.battle_target = None
+        self.battle_cursor_index = 0
+        self.battle_pp_before = None
+        self.battle_foe_hp_before = None
+        self.battle_switch_target = None
+        self.battle_switch_phase = None
+        self.battle_switch_text = None
+        self.learning_move = None
         self.provider_health_future = None
         self.provider_health = "unknown"
         self.provider_health_error = ""
-        self.provider_event = None
+        self.provider_health_checked_at = monotonic()
+        self.provider_events = deque(maxlen=500)
+        self.strategy = JourneyStrategy(self, strategy_provider, enabled=vision_enabled)
+        self.action_source = "idle"
         self._start_provider_health_check()
 
     def _tactical_usage_provider(self):
@@ -82,21 +146,30 @@ class Gold97Controller:
         if not callable(health):
             self.provider_health = "ready"
             return
-        self.provider_health = "checking"
+        if self.provider_health != "ready":
+            self.provider_health = "checking"
         self.provider_health_error = ""
         self.provider_health_future = self.executor.submit(health)
 
     def _set_provider_event(self, message):
-        self.provider_event = str(message)[:180]
+        self.provider_events.append(str(message)[:180])
 
     def pop_provider_event(self):
-        event, self.provider_event = self.provider_event, None
-        return event
+        return self.provider_events.popleft() if self.provider_events else None
 
     def _poll_provider_health(self):
+        if (self.provider_health_future is None and self.provider_health == 'unavailable'
+                and self.playback.requested and monotonic() >= self.playback.retry_at):
+            self.playback.status = 'recovering'
+            self._start_provider_health_check()
+        if (self.provider_health_future is None and self.provider_health == "ready"
+                and monotonic() - self.provider_health_checked_at >= 10):
+            self.provider_health_checked_at = monotonic()
+            self._start_provider_health_check()
         if self.provider_health_future is None or not self.provider_health_future.done():
             return
         future, self.provider_health_future = self.provider_health_future, None
+        self.provider_health_checked_at = monotonic()
         try:
             result = future.result()
             if not isinstance(result, dict) or result.get("status") != "ok":
@@ -104,6 +177,8 @@ class Gold97Controller:
         except Exception as exc:
             self.provider_health = "unavailable"
             self.provider_health_error = f"{type(exc).__name__}: {exc}"
+            if self.playback.status != 'blocked':
+                self.playback.waiting(self.provider_health_error)
             self._set_provider_event(f"{self._provider_label()} unavailable: {self.provider_health_error}")
             # Verified opening goals and single-option dialogue do not require
             # the tactical sidecar. A later multi-option request will still fail
@@ -111,7 +186,11 @@ class Gold97Controller:
             return
         self.provider_health = "ready"
         self.provider_health_error = ""
-        self._set_provider_event(f"{self._provider_label()} sidecar ready")
+        if self.playback.requested and self.playback.status in {'recovering', 'waiting for provider'}:
+            self.paused = False
+            self.pause_reason = ''
+            self.strategy.invalidate()
+            self.playback.ready()
 
     @staticmethod
     def _location(state):
@@ -123,19 +202,25 @@ class Gold97Controller:
             return
         key, position = self._location(state)
         self.memory.visited(key, position)
+        self.movement_history.observe(key, position)
         if self.last:
             old_key, origin, action = self.last
             if action in _STEPS and old_key == key:
                 if position != origin:
-                    self.held_action = None
-                    self.last_move_direction = action
+                    delta = (position[0] - origin[0], position[1] - origin[1])
+                    observed = next((d for d, step in _STEPS.items() if step == delta), None)
+                    self.last_move_direction = observed
                     self.memory.move_result(key, origin, action, position)
                     self._set_provider_event(
-                        f"Moved {action} to {position[0]},{position[1]}"
+                        f"Moved {observed or 'across tiles'} to {position[0]},{position[1]}"
                     )
                     self.stalls = 0
                     self.replans_at.pop((key, origin), None)
                     self.last = None
+                    # Replan immediately at the new tile. If the next route
+                    # step has the same heading, the native D-pad hold remains
+                    # down and walking continues without a release/repress gap.
+                    self.cooldown = 0
                 elif self.cooldown == 0:
                     self.held_action = None
                     self.memory.move_result(key, origin, action, position)
@@ -148,31 +233,6 @@ class Gold97Controller:
                         place = (key, position)
                         cycles = self.replans_at.get(place, 0) + 1
                         self.replans_at[place] = cycles
-                        bedroom = (state.map_group == 20 and state.map_number == 7
-                                   and not getattr(state, "read_oaks_email", True))
-                        if (self.restore_stuck and self.stuck_restores < 3
-                                and (bedroom or cycles >= 3)):
-                            try:
-                                recovered = self.restore_stuck()
-                            except OSError:
-                                recovered = None
-                            if recovered:
-                                self.stuck_restores += 1
-                                if not self.memory.restore(recovered):
-                                    self.memory.reset()
-                                self.route = RouteProgress.from_dict(
-                                    self.memory.world.get("route"))
-                                self.opening = Gold97Opening()
-                                self.opening_goal = None
-                                self.interaction_positions.clear()
-                                self.screen_note = None
-                                self.decision_future = None
-                                self.held_action = None
-                                self.cooldown = 24
-                                self.stalls = 0
-                                self.replans_at.clear()
-                                self._set_provider_event("Movement stalled; restored a checkpoint")
-                                return True
                         self.stalls = 0
                         self.decision_future = None
                         self.screen_note = None
@@ -196,35 +256,45 @@ class Gold97Controller:
             return
         key = (encounter["map"], encounter["species_id"])
         self.attempts[key] = self.attempts.get(key, 0) + 1
-        if self.attempts[key] > 3 or not self.restore_encounter:
-            self.pause("Static encounter lost; manual review needed")
-            return
-        self.restore_encounter(encounter["checkpoint"])
-        self.memory.restore(encounter["checkpoint"])
-        self.route = RouteProgress.from_dict(self.memory.world.get("route"))
-        self.last = None
-        self.held_action = None
-        self.screen_note = None
-        self.vision_key = None
-        self.decision_future = None
-        self.cooldown = 20
+        self.pause("Static encounter ended without a capture; inspect before continuing")
 
     def pause(self, reason):
+        if 'unavailable' in reason and reason.startswith(('Laya', 'Jev')):
+            self.provider_health = 'unavailable'
+            self.playback.waiting(reason)
+        else:
+            self.playback.blocked(reason)
+        self.strategy.invalidate()
         self.paused = True
         self.pause_reason = reason
         self.held_action = None
 
     def resume(self):
+        self.dialogue.reset()
+        self.playback.request(True)
+        self.strategy.invalidate()
+        self.strategy.observations.pending = None
+        self.strategy.failures = 0
+        self.strategy.excluded.clear()
+        self.strategy.rechecked_positions.clear()
         self.paused = False
         self.pause_reason = ""
         self.stalls = 0
+        self.cooldown = 0
+        self.unknown_frames = 0
+        if self.decision_future is not None:
+            self.decision_future.cancel()
+        self.decision_future = None
+        self.decision_key = None
         self.title_bootstrap_done = False
         self.held_action = None
+        self.interaction_positions.clear()
+        self.interaction_map_key = None
         if self.provider_health == "unavailable":
             self._start_provider_health_check()
 
     def _screen(self, state, frame):
-        if self.vision is None:
+        if self.vision is None or not self.strategy.use_luna:
             return None
         key = (state.map_group, state.map_number, state.x, state.y,
                state.battle.kind, getattr(state.battle.opponent, "hp", None))
@@ -234,8 +304,9 @@ class Gold97Controller:
             try:
                 note = self.vision_future.result()
             except Exception as exc:
-                self.pause(f"Screen unclear and Luna unavailable: {type(exc).__name__}")
-                note = None
+                self.strategy.provider_failed(f"Luna screen reader: {type(exc).__name__}")
+                note = {"mode": "unknown", "screen_text": [],
+                        "uncertainty": type(exc).__name__}
             if note:
                 self.usage.record("luna", **(note.get("usage") or {}))
             if self.vision_key == key and note:
@@ -257,12 +328,271 @@ class Gold97Controller:
         if self.screen_note and self.vision_key == key:
             return self.screen_note
         if frame is None:
-            self.pause("Screen unclear and no frame available")
-            return None
+            self._set_provider_event("Screen unavailable; advancing")
+            return {"mode": "unknown", "screen_text": [],
+                    "uncertainty": "no frame"}
         self.vision_key = key
         self.screen_note = None
+        model_input = getattr(self.vision, "model_input", None)
+        if callable(model_input):
+            self.latest_model_input = {"provider": "Luna", **model_input(frame)}
+            self._set_provider_event("Luna input · screen + image")
         self.vision_future = self.executor.submit(self.vision.describe, frame.copy())
         return None
+
+    def _service_route(self, state, target, goal, *, arrival=None):
+        """Walk to a service entrance using the same collision-aware route as story goals."""
+        if state.x is None or state.y is None or target is None:
+            return None
+        position = (state.x, state.y)
+        self.navigation_target = ((state.map_group, state.map_number), target)
+        self.opening_goal = goal
+        if position == target:
+            # A warp at the map edge can require another step in its entrance
+            # direction. A at the doorway leaves the player there forever.
+            return arrival
+        key = f"{state.map_group:02X}:{state.map_number:02X}"
+        action = _route(self.memory.map(key), position, target,
+                        state.map_width, state.map_height,
+                        avoid=self.interaction_positions | {
+                            item_cell(e) for e in (self.map_state.snapshot.entities
+                                                  if self.map_state.snapshot else ())},
+                        terrain=self.terrain)
+        if action:
+            self.opening_goal = goal
+            self.last = (key, position, action)
+            self.held_action = action
+            self.cooldown = _MOVE_HOLD_FRAMES
+        return action
+
+    def _recovery_action(self, state, *, overworld, prompt_visible=False):
+        """Return a deterministic heal route, or None when no safe route is known."""
+        if state.in_battle or not getattr(state, "party", ()):
+            return None
+        town_key = (state.map_group, state.map_number)
+        check_in = (center_target(state) is not None and
+                    getattr(state, "last_spawn_map", town_key) != town_key)
+        if self.recovery is None and (needs_healing(state) or check_in):
+            self.recovery = {"started": True, "attempts": 0}
+            self._set_provider_event("Visiting the local Pokémon Center")
+        if self.recovery is None:
+            return None
+        if is_center(state):
+            from .gold97_services import fully_recovered
+            if fully_recovered(state):
+                self.recovery["exit"] = True
+            if self.recovery.get("exit"):
+                if not overworld:
+                    return "a" if prompt_visible else None
+                return self._service_route(state, (5, 7),
+                                           "Leave the Pokémon Center", arrival="down")
+            target = nurse_target(state)
+            if not overworld:
+                return "a" if prompt_visible else None
+            if (state.x, state.y) == target:
+                self._set_provider_event("Healing the party at the Pokémon Center")
+                if not self.recovery.get("faced_nurse"):
+                    self.recovery["faced_nurse"] = True
+                    # Arrival coordinates can update before the walking animation
+                    # finishes. Hold the facing direction before tapping A across
+                    # the counter; a one-frame turn can be ignored by the ROM.
+                    self.cooldown = _MOVE_HOLD_FRAMES
+                    return "up"
+                self.recovery["attempts"] += 1
+                if self.recovery["attempts"] > 8:
+                    self.pause("Pokémon Center nurse did not restore HP")
+                    return None
+                return "a"
+            return self._service_route(state, target, "Heal at the Pokémon Center")
+        if self.recovery.get("exit"):
+            self.recovery = None
+            self._set_provider_event("Pokémon Center visit complete")
+            return None
+        if not overworld:
+            # A menu may already be open when the heal threshold is crossed.
+            # Close it before sending walking directions toward the Center.
+            return "b" if prompt_visible else None
+        entrance = center_target(state)
+        if entrance is None:
+            retreat = center_retreat_target(state)
+            if retreat is None:
+                return None
+            target, arrival = retreat
+            return self._service_route(state, target,
+                                       "Retreat to the Pokémon Center",
+                                       arrival=arrival)
+        action = self._service_route(state, entrance[0],
+                                     "Return to the Pokémon Center", arrival="up")
+        if action:
+            self._set_provider_event("Returning to the Pokémon Center")
+        return action
+
+    def _shopping_action(self, state, *, overworld):
+        """Buy Poké Balls only when the visible Mart screen confirms each step."""
+        if self.recovery is not None or state.in_battle:
+            return None
+        if self.shopping is None:
+            if not should_buy_balls(state):
+                return None
+            target = mart_target(state)
+            if target is None:
+                return None
+            shop_key = ((state.map_group, state.map_number), state.money,
+                        state.poke_ball_count)
+            if shop_key in self.shopping_skip:
+                return None
+            self.shopping = {"target": target[0], "town": shop_key,
+                             "last_balls": state.poke_ball_count,
+                             "selected_ball": False, "last_ui": None,
+                             "repeats": 0, "talks": 0}
+            self._set_provider_event("Heading to the Mart for Poké Balls")
+        plan = self.shopping
+        if not is_mart(state):
+            if plan.get("exit"):
+                self.shopping = None
+                return None
+            return self._service_route(state, plan["target"], "Buy Poké Balls",
+                                       arrival="up")
+        if plan.get("exit"):
+            if not overworld:
+                return "b"
+            return self._service_route(state, (4, 7), "Leave the Mart",
+                                       arrival="down")
+        balls = getattr(state, "poke_ball_count", 0)
+        if balls > plan["last_balls"]:
+            plan["last_balls"] = balls
+            plan["selected_ball"] = False
+            plan["last_ui"] = None
+            plan["repeats"] = 0
+            self._set_provider_event(f"Bought Poké Balls; now carrying {balls}")
+        if not should_buy_balls(state):
+            plan["exit"] = True
+            return "b" if not overworld else self._service_route(
+                state, (4, 7), "Leave the Mart", arrival="down")
+        if not overworld:
+            step = mart_menu_step(plan, state)
+            if step is None:
+                if (getattr(state, "screen_cursor", None) is None and
+                        plan.get("transitions", 0) < 3):
+                    # The indoor warp and Mart text can take several frames to
+                    # finish drawing. Wait for a readable menu, without ever
+                    # confirming an unidentified item or quantity prompt.
+                    plan["transitions"] = plan.get("transitions", 0) + 1
+                    return "wait"
+                plan["exit"] = True
+                self.shopping_skip.add((plan["town"][0], state.money, balls))
+                self._set_provider_event("Mart screen unclear; leaving without using an item")
+                return "b"
+            action, phase = step
+            plan["transitions"] = 0
+            ui = (phase, getattr(state, "screen_cursor", None),
+                  tuple(getattr(state, "screen_lines", ()) or ()))
+            plan["repeats"] = plan["repeats"] + 1 if ui == plan["last_ui"] else 0
+            plan["last_ui"] = ui
+            if plan["repeats"] >= 3:
+                plan["exit"] = True
+                self.shopping_skip.add((plan["town"][0], state.money, balls))
+                self._set_provider_event("Mart menu did not advance; leaving")
+                return "b"
+            return action
+        if state.x is None or state.y is None:
+            return None
+        # The counter tile (2, 3) is blocked. Talk across it from (3, 3).
+        clerk_tile = (3, 3)
+        if (state.x, state.y) == clerk_tile:
+            if not plan.get("faced_clerk"):
+                plan["faced_clerk"] = True
+                self.cooldown = _MOVE_HOLD_FRAMES
+                return "left"
+            plan["talks"] += 1
+            if plan["talks"] > 3:
+                plan["exit"] = True
+                self.shopping_skip.add((plan["town"][0], state.money, balls))
+                return self._service_route(state, (4, 7), "Leave the Mart",
+                                           arrival="down")
+            return "a"
+        return self._service_route(state, clerk_tile, "Buy Poké Balls")
+
+    @staticmethod
+    def _escape_action(state):
+        visible_menu = getattr(state, "battle_menu_kind", None)
+        if visible_menu == "moves":
+            return "b"
+        if visible_menu == "text":
+            lines = tuple(getattr(state, "screen_lines", ()) or ())
+            if any("CANCEL" in line or "USE" in line for line in lines):
+                return "b"
+            return "a"
+        cursor = getattr(state, "battle_menu_cursor", None)
+        if cursor is None or cursor == (2, 2):
+            return "a"
+        if cursor[0] != 2:
+            return "right"
+        return "down"
+
+    def _capture_action(self, state):
+        """Use the battle PACK on a new hack-exclusive species, never on old ones."""
+        foe = state.battle.opponent
+        if not novel_capture(state, foe):
+            self.capture = None
+            return None
+        # A weak party gets out of a wild encounter first.  Capturing is a
+        # useful detour only when the active team can safely continue.
+        if needs_healing(state):
+            self.capture = None
+            return None
+        balls = getattr(state, "poke_ball_count", None)
+        if balls is None or balls <= 0:
+            self._set_provider_event("No Poké Balls; escaping the encounter")
+            self.capture = {"species_id": foe.species_id, "phase": "escape",
+                            "attempts": 0, "balls": 0, "steps": 0}
+            return self._escape_action(state)
+        if self.capture is None or self.capture.get("species_id") != foe.species_id:
+            self.capture = {"species_id": foe.species_id, "phase": "menu",
+                            "attempts": 0, "balls": balls, "steps": 0}
+        plan = self.capture
+        if balls < plan["balls"]:
+            plan["attempts"] += plan["balls"] - balls
+            plan["balls"] = balls
+            plan["steps"] = 0
+        if plan["attempts"] >= _MAX_CAPTURE_ATTEMPTS or plan["steps"] >= 12:
+            plan["phase"] = "escape"
+        if plan["phase"] == "escape":
+            self._set_provider_event("Capture attempt ended; leaving the encounter")
+            return self._escape_action(state)
+        plan["steps"] += 1
+        visible_menu = getattr(state, "battle_menu_kind", None)
+        cursor = getattr(state, "battle_menu_cursor", None)
+        if visible_menu == "moves":
+            return "b"
+        if visible_menu == "command" or visible_menu is None:
+            # The ROM orders FIGHT/PKMN on the first row and PACK/RUN below.
+            if cursor == (1, 2):
+                plan["phase"] = "bag"
+                return "a"
+            if cursor is None:
+                return "a"
+            if cursor[0] == 2:
+                return "left"
+            return "down" if cursor[1] == 1 else "a"
+        lines = tuple(getattr(state, "screen_lines", ()) or ())
+        ball_row = next((row for row, line in enumerate(lines)
+                         if "POK" in line.upper() and "BALL" in line.upper()), None)
+        if ball_row is not None and any("USE" in line for line in lines):
+            self._set_provider_event(f"Using a Poké Ball on {foe.species}")
+            plan["phase"] = "throw"
+            return "a"
+        if ball_row is not None:
+            screen_cursor = getattr(state, "screen_cursor", None)
+            if screen_cursor and screen_cursor[1] != ball_row:
+                return "down" if screen_cursor[1] < ball_row else "up"
+            plan["phase"] = "select_ball"
+            return "a"
+        if any("CANCEL" in line for line in lines):
+            # The bag initially opens in ITEMS, with POTION highlighted. Switch
+            # pockets; never confirm an unidentified item as a Poké Ball.
+            return "right"
+        return "a"
 
     def _options(self, state, entities, overworld=True):
         if state.in_battle:
@@ -271,26 +601,28 @@ class Gold97Controller:
                 return {}
             return {"a": "confirm highlighted battle command", "b": "back or cancel",
                     "up": "move battle cursor up", "down": "move battle cursor down",
-                    "left": "move battle cursor left", "right": "move battle cursor right",
-                    "wait": "wait for animation"}
+                    "left": "move battle cursor left", "right": "move battle cursor right"}
         if not overworld:
-            # Gold 97's RAM adapter does not decode the text-box cursor yet. A/B
-            # back-out guesses can leave a dialogue open forever, so make the safe
-            # forward action the only autonomous menu choice until a menu decoder is
-            # available. Battles retain their full closed set above.
-            return {"a": "advance current dialogue or confirm the highlighted menu"}
+            text = ' '.join(getattr(state, 'screen_lines', ())).upper()
+            if any(word in text for word in ('RELEASE', 'DEPOSIT', 'WITHDRAW', 'CHANGE BOX', 'STATS')):
+                return {'b': 'leave an unowned roster menu'}
+            if getattr(state, 'screen_cursor', None) is not None:
+                return {'b': 'cancel an unidentified menu'}
+            return {"a": "advance current dialogue"}
         if state.x is None or state.y is None or not state.map_group:
             return {}
         key, position = self._location(state)
         blocked = self.memory.map(key)["blocked"]
         options = {}
+        walkable = {}
         for direction, (dx, dy) in _STEPS.items():
             target = (position[0] + dx, position[1] + dy)
             if (0 <= target[0] < state.map_width and
                     0 <= target[1] < state.map_height and
-                    (self.terrain is None or self.terrain.allows(target, direction)) and
-                    [list(position), direction] not in blocked):
-                options[direction] = f"walk {direction} toward {target}"
+                    (self.terrain is None or self.terrain.allows(target, direction))):
+                walkable[direction] = f"walk {direction} toward {target}"
+                if [list(position), direction] not in blocked:
+                    options[direction] = walkable[direction]
         visited = {tuple(point) for point in self.memory.map(key)["visited"]}
         unexplored = {
             direction: description for direction, description in options.items()
@@ -317,40 +649,154 @@ class Gold97Controller:
                 if (position[0] + _STEPS[direction][0],
                     position[1] + _STEPS[direction][1]) not in self.interaction_positions
             }
-        adjacent = [entity for entity in entities if
-                    abs(entity.pixel_x - state.x * 16) +
-                    abs(entity.pixel_y - state.y * 16) == 16]
-        # Pressing A in open overworld space is a no-op. Do not offer it as a
-        # tempting model choice unless an interaction is visible or every
-        # surrounding direction is blocked and an object may be in front.
-        if adjacent:
-            options["a"] = "interact with a visible adjacent sprite"
-        elif not options:
-            options["a"] = "inspect the object directly in front, if any"
-        if position in self.interaction_positions:
-            options.pop("a", None)
         if not options:
-            options["wait"] = "wait for the current animation"
+            # Blocked-edge memory can be stale after a transition or an input
+            # timing miss. Retry a terrain-permitted step before inventing an
+            # interaction with a nearby NPC or an empty doorway.
+            options = {
+                direction: description for direction, description in walkable.items()
+                if (position[0] + _STEPS[direction][0],
+                    position[1] + _STEPS[direction][1]) not in self.interaction_positions
+            } or walkable
         return options
 
-    def step(self, state, *, frame=None, entities=(), overworld=True,
-             terrain=None):
-        """Return one button or None. Call once per emulated frame."""
-        self.terrain = (terrain if terrain is not None and
-                        terrain.map_key == (state.map_group, state.map_number)
-                        else None)
-        before_route = self.route.to_dict()
+    def _item_detour(self, state, entities, *, overworld):
+        """Give a visible item a first-class goal before story navigation."""
+        if state.in_battle or not overworld:
+            return None
+        item_entities = tuple(entity for entity in entities if is_item_entity(entity))
+        if not item_entities:
+            return None
+        key = f"{state.map_group:02X}:{state.map_number:02X}"
+        position = (state.x, state.y)
+        item_positions = {item_cell(entity) for entity in item_entities}
+        item_positions.discard(None)
+        if position in self.interaction_positions:
+            item_positions = {point for point in item_positions if point != position}
+        action = item_action(self.memory, state, item_entities,
+                             terrain=self.terrain, avoid=self.interaction_positions,
+                             attempted=self.attempted_items)
+        if action is None:
+            return None
+        target = min((point for point in item_positions if (key, point) not in self.attempted_items),
+                     key=lambda point: abs(point[0] - position[0]) +
+                     abs(point[1] - position[1]), default=None)
+        if target is None:
+            return None
+        self.opening_goal = "Collect the nearby item before continuing"
+        if action == "a":
+            self.attempted_items.add((key, target))
+            self.interaction_positions.add(position)
+            self._set_provider_event("Collecting nearby item before continuing")
+        else:
+            self._set_provider_event("Heading to a nearby item before continuing")
+        self.last = (key, position, action)
+        self.held_action = action if action in _STEPS else None
+        self.cooldown = (_MOVE_HOLD_FRAMES if action in _STEPS
+                         else _MENU_COOLDOWN_FRAMES)
+        return action
+
+    def _battle_reset(self):
+        self.wild_battle_committed = False
+        self.battle_strategy.reset()
+        self.battle_executor.reset()
+        self.battle_phase = None
+        self.battle_target = None
+        self.battle_cursor_index = 0
+        self.battle_pp_before = None
+        self.battle_foe_hp_before = None
+        self.battle_switch_target = None
+        self.battle_switch_phase = None
+        self.battle_switch_text = None
+
+    def _trainer_battle_action(self, state):
+        return self.battle_executor.step(self, state)
+
+    def observe(self, state, entities=(), overworld=True, terrain=None, prompt_visible=None):
+        """Also called during manual play and provider outages; never presses keys."""
+        self.map_state.update(state, terrain, ready=terrain is not None,
+                              overworld=overworld, entities=entities,
+                              destination=self.navigation_target, connections=self.strategy.data['connections'])
+        snapshot = self.map_state.snapshot
+        self.terrain = snapshot.terrain if snapshot and overworld else terrain
         self.route.observe(state)
-        if self.route.to_dict() != before_route:
+        self.strategy.observe(state, entities, overworld, prompt_visible)
+        self.rewards.observe(state, self.route)
+        self.rewards.observe_exploration(state, overworld=overworld)
+        self.training.observe(state, self.route)
+
+    def manual_pause(self):
+        if self.party_reorder.phase:
+            self.party_reorder.phase = 'close'
+        if self.roster_service.transfer.phase:
+            self.roster_service.transfer.phase = 'close'
+        self.roster_service.target = None
+        self.playback.request(False)
+        self.strategy.invalidate()
+        self.held_action = None
+        self.paused = False
+        self.pause_reason = ''
+
+    def step(self, state, *, frame=None, entities=(), overworld=True,
+             terrain=None, prompt_visible=None):
+        self.last_decision = None
+        if overworld or state.in_battle:
+            self.dialogue.reset()
+        self.observe(state, entities, overworld, terrain, prompt_visible)
+        action = self._step(state, frame=frame, entities=entities, overworld=overworld,
+                            terrain=terrain, prompt_visible=prompt_visible)
+        if self.playback.requested and not self.paused and self.provider_health == 'ready':
+            self.playback.ready()
+        if self.paused:
+            action = None
+            self.held_action = None
+        self.action_source = (
+            self._provider_label() if action and self.last_decision and self.last_decision.request_made else
+            "deterministic execution" if action else
+            "paused" if self.paused else
+            "awaiting Luna" if self.strategy.future else
+            f"awaiting {self._provider_label()}" if self.decision_future else "idle")
+        return action
+
+    def _step(self, state, *, frame=None, entities=(), overworld=True,
+              terrain=None, prompt_visible=None):
+        """Return one button or None. Call once per emulated frame."""
+        map_key = (state.map_group, state.map_number)
+        if map_key != self.interaction_map_key:
+            self.interaction_positions.clear()
+            self.last_move_direction = None
+            self.interaction_map_key = map_key
+        snapshot = self.map_state.snapshot
+        self.terrain = snapshot.terrain if snapshot and overworld else None
+        self.route.observe(state)
+        learned = proposed_move(state)
+        if learned:
+            self.learning_move = learned
+        elif overworld and not state.in_battle:
+            self.learning_move = None
+        if self.route.to_dict() != self.memory.world.get("route"):
             self.memory.world["route"] = self.route.to_dict()
             self.memory.save()
         self._poll_provider_health()
+        if self.paused and self.playback.status == 'blocked':
+            return None
+        if (not state.in_battle and self._tactical_usage_provider() == "laya"
+                and self.provider_health != "ready"):
+            self.last = None
+            self.held_action = None
+            if self.provider_health == "unavailable":
+                self.pause(f"Laya unavailable: {self.provider_health_error}. Retry to reconnect.")
+            return None
         if state.in_battle or not overworld:
             self.last = None
             self.held_action = None
             self.stalls = 0
+            if not state.in_battle:
+                self._battle_reset()
         elif self._observe_move(state):
             return None
+        if not state.in_battle and self.wild_battle_committed:
+            self._battle_reset()
         self.unknown_frames = 0 if overworld or state.in_battle else self.unknown_frames + 1
         if state.in_battle and state.battle.opponent:
             self.last_battle = (state.battle.kind, state.battle.opponent.species)
@@ -363,6 +809,12 @@ class Gold97Controller:
                 self.memory.clear_blocked_at(key, position)
             self.last_battle = None
         self._finish_encounter(state)
+        if self.capture and not state.in_battle:
+            species_id = self.capture["species_id"]
+            if species_id in getattr(state, "pokedex_caught_ids", ()):
+                self.memory.remember("capture", f"species {species_id}",
+                                     f"{state.map_group:02X}:{state.map_number:02X}")
+            self.capture = None
         if self.encounter and not self.encounter["started"] and not state.in_battle:
             self.pending_frames -= 1
             if self.pending_frames <= 0:
@@ -372,22 +824,57 @@ class Gold97Controller:
             return None
         if self.paused:
             return None
-        if self.provider_health == "checking":
-            return None
+        self.action_source = "deterministic execution"
         # A fresh cartridge starts on the title menu before any party/map state is
         # available. Select the highlighted NEW GAME entry once so a local provider
         # can take over the subsequent naming, dialogue, and movement decisions.
         if (not self.title_bootstrap_done and not overworld and not state.in_battle
-                and not state.party):
+                and not state.party and map_key == (0, 0)):
             self.title_bootstrap_done = True
             self.held_action = "a"
             self.cooldown = _MENU_COOLDOWN_FRAMES
             return "a"
-        if not overworld and not state.in_battle and self.unknown_frames < 8:
+        prompt = (_visible_prompt(state) if prompt_visible is None
+                  else prompt_visible)
+        if (not overworld and not state.in_battle and
+                (self.unknown_frames < 8 or not prompt)):
             return None
+        learning = learning_menu_step(state, self.learning_move)
+        if learning is not None:
+            action, detail = learning
+            if action is None:
+                self.pause(detail)
+                return None
+            self.last_decision = None
+            self.held_action = None
+            self._set_provider_event(detail)
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            return action
         key, position = self._location(state)
+        self.navigation_target = None
+        if getattr(state, 'storage_verified', False):
+            owned, roster_action = self.roster_service.step(state, overworld)
+            if owned:
+                self.held_action = roster_action if roster_action in _STEPS and overworld else None
+                self.cooldown = _MOVE_HOLD_FRAMES if self.held_action else _MENU_COOLDOWN_FRAMES
+                return roster_action
+        recovery_action = self._recovery_action(
+            state, overworld=overworld, prompt_visible=prompt)
+        if recovery_action:
+            self.last_decision = None
+            self.held_action = recovery_action if recovery_action in _STEPS else None
+            if recovery_action not in _STEPS:
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+            return recovery_action
         opening = self.opening.choose(state, self.memory, overworld=overworld,
                                       terrain=self.terrain)
+        # The opening planner historically emitted a fixed A for the scripted
+        # rival battle. Keep its goal metadata, but let the battle planner own
+        # the input sequence so it can avoid exhausted move slots.
+        if (opening is not None and state.in_battle
+                and state.battle.kind == "trainer" and opening[1] == "a"):
+            self.opening_goal = opening[0]
+            opening = None
         if opening is not None:
             goal, action = opening
             if goal != self.opening_goal:
@@ -396,9 +883,36 @@ class Gold97Controller:
             self.last_decision = None
             self.last = (key, position, action)
             self.held_action = action if action in _STEPS else None
+            if action == "wait":
+                self.wait_streak += 1
+                if self.wait_streak >= _WAIT_LIMIT:
+                    action = "a"
+                    self.wait_streak = 0
+                    self._set_provider_event("Advancing a stalled scripted scene")
+                else:
+                    self.cooldown = _MENU_COOLDOWN_FRAMES
+                    return None
+            else:
+                self.wait_streak = 0
             self.cooldown = (_MOVE_HOLD_FRAMES if action in _STEPS
                              else _MENU_COOLDOWN_FRAMES)
             return None if action == "wait" else action
+        if self.party_reorder.phase:
+            action = self.party_reorder.step(state, overworld)
+            self.held_action = None
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            return action
+        service_action = self._shopping_action(state, overworld=overworld)
+        if service_action:
+            self.last_decision = None
+            if service_action == "wait":
+                self.held_action = None
+                self.cooldown = 12
+                return None
+            self.held_action = service_action if service_action in _STEPS else None
+            if service_action not in _STEPS:
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+            return service_action
         if state.in_battle and self.encounter and self.encounter["species_id"] is None:
             foe = state.battle.opponent
             if state.battle.kind == "trainer":
@@ -407,89 +921,92 @@ class Gold97Controller:
                 self.encounter["started"] = True
                 self.encounter["species_id"] = foe.species_id
                 self.encounter["species"] = foe.species
-        lead = state.party[0] if state.party else None
-        if (self.healing is None and overworld and not state.in_battle and lead
-                and getattr(state, "potion_count", 0) > 0
-                and lead.hp > 0 and lead.hp * 2 < lead.max_hp):
-            slot = getattr(state, "potion_slot", None)
-            if slot is not None:
-                self.healing = {"queue": ["start", "down", "down", "a"]
-                                + ["down"] * slot + ["a", "a", "a"],
-                                "initial_hp": lead.hp, "checks": 0}
-                self._set_provider_event(f"Healing {lead.species} before continuing")
-        if self.healing is not None:
-            if self.healing["queue"]:
-                action = self.healing["queue"].pop(0)
-            elif lead and lead.hp > self.healing["initial_hp"]:
-                if overworld:
-                    self.healing = None
-                    return None
-                action = "b"
-            else:
-                self.healing["checks"] += 1
-                if self.healing["checks"] > 4:
-                    self.pause("Potion sequence did not restore HP; inspect the menu")
-                    return None
-                action = "a"
-            self.last_decision = None
-            self.held_action = None
-            self.cooldown = _MENU_COOLDOWN_FRAMES
-            return action
         foe = state.battle.opponent
-        if (state.in_battle and state.battle.kind == "wild" and not self.encounter
-                and foe is not None and not hack_exclusive(foe.species)):
-            # Gold 97's 2x2 FIGHT/PKMN/PACK/RUN menu ignores B. A choice-only
-            # model can otherwise press B forever, so navigate RUN from the
-            # cartridge's live menu cursor and advance battle text with A.
-            cursor = getattr(state, "battle_menu_cursor", None)
-            if cursor is None or cursor == (2, 2):
-                action = "a"
-            elif cursor[0] != 2:
-                action = "right"
-            else:
-                action = "down"
+        if state.in_battle and state.battle.kind == "wild":
+            text = " ".join(" ".join(getattr(state, "screen_lines", ()) or ()).upper().split())
+            active = getattr(state.battle, "active", None)
+            forced = (getattr(state, "battle_menu_kind", None) in
+                      {"forced_prompt", "party", "party_action"}
+                      or (active is not None and active.hp <= 0))
+            failed_escape = any(message in text for message in
+                                ("CAN'T ESCAPE", "CANNOT ESCAPE", "CAN T ESCAPE"))
+            self.wild_battle_committed |= forced or failed_escape
+            if self.wild_battle_committed:
+                self.capture = None
+                action = self._trainer_battle_action(state)
+                self.last_decision = None
+                self.held_action = None
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+                return action
+        if state.in_battle:
+            self.battle_strategy.static_capture = bool(self.encounter and self.encounter.get('started'))
+            action = self._trainer_battle_action(state)
             self.last_decision = None
             self.held_action = None
             self.cooldown = _MENU_COOLDOWN_FRAMES
-            return action
-        if state.in_battle and state.battle.kind == "trainer":
-            # The command menu starts on FIGHT and B is disabled. Confirming
-            # advances text and selects the first move; unlike Laya's repeated
-            # B, this has been exercised against the Route 101 cave trainer.
-            action = "a"
-            self.last_decision = None
-            self.held_action = None
-            self.cooldown = _MENU_COOLDOWN_FRAMES
-            return action
-        navigation = journey_step(state, self.memory, self.route,
-                                  overworld=overworld,
-                                  avoid=self.interaction_positions,
-                                  terrain=self.terrain)
-        if navigation:
-            goal, action = navigation
-            if goal != self.opening_goal:
-                self.opening_goal = goal
-                self._set_provider_event(f"Goal: {goal}")
-            key, position = self._location(state)
-            self.last = (key, position, action)
-            self.held_action = action
-            self.cooldown = _MOVE_HOLD_FRAMES
-            return action
-        options = self._options(state, entities, overworld)
+            return None if action == 'wait' else action
+        strategy_active = (overworld and not state.in_battle and
+                           self.route.now is not None and self.route.now >= 3 and
+                           self.terrain is not None)
+        training_required = self.training.required(state) if state.party else False
+        if (overworld and state.party and getattr(state, 'mechanics_verified', False)
+                and (not strategy_active or training_required)):
+            lead = self.training.lead(state)
+            if self.party_reorder.start(state, lead):
+                self.held_action = None
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+                return self.party_reorder.step(state, True)
+            training = self.training.direction(state, self.terrain)
+            if training:
+                self.last = (key, position, training)
+                self.held_action = training
+                self.cooldown = _MOVE_HOLD_FRAMES
+                return training
+        if strategy_active:
+            options = self.strategy.options(state, self.terrain)
+            if not options:
+                self.held_action = None
+                return None
+            if self.strategy.target:
+                self.navigation_target = (map_key, tuple(self.strategy.target["cell"]))
+        else:
+            item_action_result = self._item_detour(state, entities, overworld=overworld)
+            if item_action_result:
+                self.last_decision = None
+                return item_action_result
+            navigation = journey_step(state, self.memory, self.route,
+                                      overworld=overworld,
+                                      avoid=self.interaction_positions,
+                                      terrain=self.terrain)
+            if navigation:
+                goal, action = navigation
+                if goal != self.opening_goal:
+                    self.opening_goal = goal
+                    self._set_provider_event(f"Goal: {goal}")
+                key, position = self._location(state)
+                self.last = (key, position, action)
+                self.held_action = action
+                self.cooldown = _MOVE_HOLD_FRAMES
+                return action
+            options = self._options(state, entities, overworld)
+        if not options and overworld and not state.in_battle:
+            map_key = (state.map_group, state.map_number, state.x, state.y,
+                       state.battle.kind, getattr(state.battle.opponent, "hp", None))
+            map_note = self.screen_note if self.vision_key == map_key else None
+            if self.vision is not None and self.stalls >= 2:
+                map_note = self._screen(state, frame)
+            options = probe_options(state, self.memory, map_note)
         if not options:
             self.no_options_frames += 1
             if (overworld and not state.in_battle and self.no_options_frames >= 60):
                 self.no_options_frames = 0
-                self.cooldown = _MENU_COOLDOWN_FRAMES
-                self._set_provider_event("No route available; checking nearby interaction")
-                return "a"
-            self._screen(state, frame)
+                self._set_provider_event("No direction confirmed yet; checking the map")
             return None
         self.no_options_frames = 0
         # Laya is the tactical provider for movement as well as menus and battles.
         # The frontier route is retained for legacy/non-Laya providers, where it
         # remains a deterministic safety path rather than a hidden substitute.
-        if (overworld and not state.in_battle and self.stalls == 0
+        if (not strategy_active and overworld and not state.in_battle and self.stalls == 0
                 and self._tactical_usage_provider() != "laya"):
             route = frontier_step(self.memory.map(key), position,
                                   state.map_width, state.map_height)
@@ -501,31 +1018,50 @@ class Gold97Controller:
         note = self.screen_note if self.vision_key == (
             state.map_group, state.map_number, state.x, state.y,
             state.battle.kind, getattr(state.battle.opponent, "hp", None)) else None
-        # Laya is intentionally local-only, so it can make the closed-set choice from
-        # cartridge state/options without paying for screen transcription.
-        if self.vision is not None and (state.in_battle or not overworld or self.stalls >= 3):
+        # Laya uses Luna only for uncertain overworld navigation; ordinary text
+        # and battles continue from cartridge state without extra model calls.
+        use_vision = (
+            ((self.stalls >= 3 or self.movement_history.looping) and overworld) or
+            (self._tactical_usage_provider() != "laya" and
+             (state.in_battle or not overworld))
+        )
+        if self.vision is not None and self.strategy.enabled and use_vision:
             note = self._screen(state, frame)
-            if note is None:
-                return None
-            if not state.in_battle and not overworld and note["mode"] not in {"menu", "dialogue"}:
-                self.pause("Screen is not a verified menu or dialogue")
-                return None
+            if note is None and (state.in_battle or not overworld):
+                # Text and battle screens can advance while a transcription is
+                # pending. A stalled overworld route still needs a direction.
+                self.held_action = None
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+                return "a"
+            if not state.in_battle and not overworld and note is not None and note["mode"] not in {"menu", "dialogue"}:
+                self._set_provider_event("Screen mode unclear; advancing")
+                self.held_action = None
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+                return "a"
+        if not strategy_active and overworld and not state.in_battle and self.movement_history.looping:
+            area = self.memory.map(key)
+            route = frontier_step(area, position, state.map_width, state.map_height,
+                                  terrain=self.terrain, avoid=self.interaction_positions)
+            if route:
+                options = {route: "retrace the map toward unexplored ground"}
+            elif note and note.get("mode") == "overworld":
+                visual = {d: text for d, text in options.items()
+                          if d in note.get("walkable_directions", ())}
+                options = visual or options
+            action = self.movement_history.choose(key, position, options)
+            options = {action: options[action]}
         body = decision_state(state, self.memory, note, key, position)
+        body["journey"] = self.strategy.context(state)
+        body["strategy"] = self.strategy.data.get("plan")
+        body["luna_enabled"] = self.strategy.enabled
         step = self.route.now
         if step is not None:
             body["goal"] = f"Complete Journey step {step}: {MAIN[step]}"
             body["journey_step"] = step
-        if state.in_battle and state.battle.kind == "wild" and not self.encounter:
-            foe = state.battle.opponent
-            if foe is not None and not hack_exclusive(foe.species):
-                body["battle_instruction"] = (
-                    "This is not a verified hack-exclusive catch. Escape using RUN; "
-                    "do not throw a ball."
-                )
         from .game_loop import GenericBranch
         decision_key = (key, position, state.battle.kind,
                         getattr(state.battle.opponent, "hp", None),
-                        tuple(options), str(note), self.route.now)
+                        tuple(options), str(note), self.route.now, self.strategy.generation)
         if self.decision_future is None:
             branch = GenericBranch(body["decision_kind"], body, options)
             self.decision_key = decision_key
@@ -546,6 +1082,16 @@ class Gold97Controller:
             self.decision_future = None
         self.last_decision = decision
         if decision.request_made:
+            if decision.model_input:
+                self.latest_model_input = {
+                    "provider": self._provider_label(),
+                    **decision.model_input,
+                }
+                kind = body.get("decision_kind", "decision")
+                self._set_provider_event(
+                    f"{self._provider_label()} input · {kind} · "
+                    f"{', '.join(options)}"
+                )
             self.usage.record(
                 self._tactical_usage_provider(),
                 input_tokens=decision.input_tokens,
@@ -554,22 +1100,44 @@ class Gold97Controller:
                 latency_ms=decision.latency_ms,
                 actual_cost_usd=decision.actual_cost_usd,
             )
-        if decision.option not in options:
+        if decision.option == "wait":
+            # Waiting is not a gameplay objective. Older Laya sidecars can still
+            # emit the retired token, so translate it to a legal forward input
+            # instead of letting the agent idle forever or treating it as a fatal
+            # policy error.
+            action = next((name for name in
+                           ("up", "down", "left", "right", "a", "b", "start")
+                           if name in options), None)
+            if action is None:
+                action = next(iter(options), "a")
+            self.wait_streak += 1
+            self._set_provider_event(f"{self._provider_label()} wait replaced with {action}")
+        elif decision.option not in options:
             self.pause(f"{self._provider_label()} returned an invalid choice")
             self._set_provider_event(f"{self._provider_label()} returned an invalid choice")
             return None
-        if decision.fell_back:
-            # Keep the closed-set safety fallback, but make it explicit in the live
-            # feed. No other provider is substituted for the configured provider.
-            self._set_provider_event(
-                f"{self._provider_label()} fallback: {decision.reason}"
-            )
-            if self._tactical_usage_provider() != "laya":
-                self.pause(f"{self._provider_label()} unavailable")
-                return None
         else:
-            self._set_provider_event(f"{self._provider_label()} chose {decision.option}")
-        action = decision.option
+            action = decision.option
+        if (action == "a" and not overworld and not state.in_battle
+                and getattr(state, "screen_cursor", None) is None):
+            action = self.dialogue.advance(state)
+            if action is None:
+                self.pause("Dialogue did not change after confirmation and cancel attempts. Inspect the screen, then Retry.")
+                return None
+        if decision.fell_back:
+            self.pause(f"{self._provider_label()} unavailable: {decision.reason}. Retry to reconnect.")
+            self.provider_health = "unavailable"
+            self.provider_health_error = decision.reason
+            self._set_provider_event(self.pause_reason)
+            return None
+        elif decision.option != "wait":
+            source = self._provider_label() if decision.request_made else "Executor (only legal action)"
+            self._set_provider_event(f"{source} chose {action}")
+        self.action_source = self._provider_label()
+        if strategy_active:
+            self.strategy.chosen(action)
+        if action != "wait":
+            self.wait_streak = 0
         if action == "a":
             self.interaction_positions.add(position)
         adjacent_sprite = any(
@@ -593,7 +1161,13 @@ class Gold97Controller:
         return None if action == "wait" else action
 
     def close(self):
+        if self.strategy.future:
+            self.strategy.future.cancel()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        provider = getattr(self.policy, "provider", None)
+        close_provider = getattr(provider, "close", None)
+        if callable(close_provider):
+            close_provider()
         self.memory.close()
 
     def usage_snapshot(self):

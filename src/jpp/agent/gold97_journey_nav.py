@@ -46,7 +46,12 @@ def _hills_target(state, memory):
 
 def journey_step(state, memory, route, *, overworld, avoid=(), terrain=None):
     """Return a verified route action when the current milestone has one."""
-    if route.now not in (3, 4) or not overworld or state.in_battle:
+    if not overworld or state.in_battle:
+        return None
+    if ((state.map_group, state.map_number) == (9, 4)
+            and getattr(state, "badge_ids", ())):
+        return _gym_exit(state, memory, terrain, avoid)
+    if route.now not in (3, 4):
         return None
     if route.now == 4:
         if (state.map_group, state.map_number) == (9, 12):
@@ -77,3 +82,24 @@ def journey_step(state, memory, route, *, overworld, avoid=(), terrain=None):
                     terrain=terrain)
     goal = "Climb Brass Tower" if route.now == 4 else "Reach Pagota City via Route 101"
     return (goal, action) if action else None
+
+
+def _gym_exit(state, memory, terrain, avoid):
+    """Route down the gym's actual collision map after earning the badge."""
+    if terrain is None or state.x is None or state.y is None:
+        return None
+    # Interior doorways lie on the south boundary. Use only open cells from
+    # the active cartridge, never a guessed screen coordinate or a fixed x.
+    targets = [(x, state.map_height - 1) for x in range(state.map_width)
+               if terrain.allows((x, state.map_height - 1), "down")]
+    position = (state.x, state.y)
+    targets.sort(key=lambda point: abs(point[0] - state.x))
+    area = memory.map("09:04")
+    for target in targets:
+        if position == target:
+            return "Leave Pagota Gym after Falkner", "down"
+        action = _route(area, position, target, state.map_width, state.map_height,
+                        avoid=avoid, terrain=terrain)
+        if action:
+            return "Leave Pagota Gym after Falkner", action
+    return None

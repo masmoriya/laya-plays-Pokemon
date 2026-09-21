@@ -1,0 +1,10 @@
+{
+  "reward_weights": {
+    "xp_tenth": 1,
+    "level": 10,
+    "capture": 25,
+    "evolution": 25,
+    "milestone": 100,
+    "discovery": 50
+  }
+}

@@ -25,6 +25,18 @@ class Mon:
     species_id: int | None = None
     species_data: object | None = None
 
+    # Optional cartridge-specific combat facts; generic adapters remain compatible.
+    max_pp: tuple[int, ...] = ()
+    stats: tuple[int, ...] = ()  # attack, defense, speed, special attack/defense
+    stages: tuple[int, ...] = ()  # signed stages; accuracy/evasion follow stats
+    move_slots: tuple[int, ...] = ()  # original zero-based cartridge slots
+    experience: int | None = None
+    growth_rate: int | None = None
+    identity: str | None = None  # OT ID, DVs and caught data; collisions stay ambiguous
+    storage_box: int | None = None
+    storage_slot: int | None = None
+    nickname: str | None = None
+
     @property
     def fainted(self) -> bool:
         return self.hp == 0

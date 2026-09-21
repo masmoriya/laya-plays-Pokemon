@@ -54,6 +54,7 @@ class Decision:
     actual_cost_usd: float | None = None
     request_made: bool = False
     model: str = MODEL
+    model_input: dict | None = None
 
 
 def cache_key(state, questions) -> str:
@@ -251,6 +252,11 @@ class Policy:
             actual_cost_usd=usage.get("actual_cost_usd", usage.get("cost_usd")),
             request_made=True,
             model=payload.get("model", self.client.model),
+            model_input={
+                "model": self.client.model,
+                "state": branch.state,
+                "questions": questions,
+            },
         )
         if option not in branch.options:
             return Decision(

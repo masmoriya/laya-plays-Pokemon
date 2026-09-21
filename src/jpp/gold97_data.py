@@ -17,11 +17,13 @@ _ANCHOR = bytes((0x81, 0x94, 0x8B, 0x81, 0x80, 0x92, 0x80, 0x94, 0x91, 0x50))
 _CHARS = {0x50: "@", 0x7F: " ", 0xE0: "'", 0xE3: "-", 0xE8: ".", 0xEF: "♂", 0xF5: "♀"}
 _CHARS.update({0x80 + i: chr(65 + i) for i in range(26)})
 _CHARS.update({0xA0 + i: chr(97 + i) for i in range(26)})
+_CHARS.update({0xF6 + i: str(i) for i in range(10)})
 _GAME_CHARS = {0x50: " ", 0x7F: " ", 0x4E: " ", 0xE3: "-", 0xE8: ".",
                0xF4: ",", 0xEF: "♂", 0xF5: "♀"}
 _GAME_CHARS[0x54] = "Poké"
 _GAME_CHARS.update({0x80 + i: chr(65 + i) for i in range(26)})
 _GAME_CHARS.update({0xA0 + i: chr(97 + i) for i in range(26)})
+_CHARS.update({0xF6 + i: str(i) for i in range(10)})
 _BASE_STAT_ANCHOR = bytes((155, 45, 54, 50, 60, 60, 40))
 _SEED_ENTRY = bytes((0x92, 0x84, 0x84, 0x83, 0x50))
 _TYPE_NAMES = (
@@ -52,6 +54,8 @@ class SpeciesData:
     height: int | None = None
     weight: int | None = None
     entry: str | None = None
+    growth_rate: int | None = None
+    catch_rate: int | None = None
 
 
 def _game_text(raw: bytes) -> str:
@@ -169,6 +173,8 @@ class Gold97RomData:
             height=entry[1] if entry else None,
             weight=entry[2] if entry else None,
             entry=entry[3] if entry else None,
+            growth_rate=stats[2] if stats else None,
+            catch_rate=stats[3] if stats else None,
         )
 
     def _base_stats(self, species_id: int):
@@ -177,12 +183,12 @@ class Gold97RomData:
         offset = table + (species_id - 1) * 32
         if table < 0 or offset < 0 or offset + 9 > len(self.rom):
             return None
-        raw = self.rom[offset : offset + 9]
+        raw = self.rom[offset : offset + 32]
         values = tuple(raw[1:7])
         if raw[0] != species_id or not all(values) or raw[7] >= len(_TYPE_NAMES) or raw[8] >= len(_TYPE_NAMES):
             return None
         first, second = _TYPE_NAMES[raw[7]], _TYPE_NAMES[raw[8]]
-        return ((first,) if first == second else (first, second), values)
+        return ((first,) if first == second else (first, second), values, raw[22], raw[9])
 
     def _pokedex_entry(self, species_id: int):
         offsets = self._pokedex_offsets()
@@ -198,16 +204,20 @@ class Gold97RomData:
         next_start = offsets[species_id] if species_id < len(offsets) else len(self.rom)
         if not category or next_start <= name_end + 5:
             return None
-        text = _game_text(self.rom[name_end + 5:next_start])
+        # The final record has no following pointer; cap it at its ROM bank so
+        # padding cannot make the entry consume unrelated cartridge data.
+        text_end = (min(next_start, ((start // 0x4000) + 1) * 0x4000)
+                    if next_start == len(self.rom) else next_start)
+        text = _game_text(self.rom[name_end + 5:text_end])
         return (category, height, weight, text or None)
 
     @lru_cache(maxsize=1)
     def _pokedex_offsets(self):
-        """Locate the ordered entry bank by validating the cartridge's first entries.
+        """Locate every ordered entry block by validating the cartridge's first entries.
 
-        The hack does not publish stable ROM offsets. Its entry blocks are contiguous,
-        so a verified Bulbasaur/ Ivysaur/ Venusaur seed-category sequence anchors the
-        active ROM's table without assuming a stock Crystal layout.
+        The hack does not publish stable ROM offsets. Its entries are contiguous inside
+        bank-aligned ROM chunks, so a verified Bulbasaur/Ivysaur/Venusaur seed-category
+        sequence anchors the active ROM's table without assuming a stock Crystal layout.
         """
         starts = []
         search = 0
@@ -217,21 +227,42 @@ class Gold97RomData:
                 break
             starts.append(start)
             search = start + 1
+        offsets = None
         for start in starts:
-            offsets, cursor = [], start
+            candidate_offsets, cursor = [], start
+            bank_end = ((start // 0x4000) + 1) * 0x4000
             for _ in range(SPECIES_COUNT):
-                next_start = self._next_entry_start(cursor)
+                candidate_offsets.append(cursor)
+                next_start = self._next_entry_start(cursor, bank_end)
                 if next_start is None:
-                    offsets.append(cursor)
                     break
-                offsets.append(cursor)
                 cursor = next_start
-            if len(offsets) >= 19 and self._entry_category_at(offsets[18]) == "RAT":
-                return tuple(offsets)
-        return None
+            if (len(candidate_offsets) >= 19
+                    and self._entry_category_at(candidate_offsets[18]) == "RAT"):
+                offsets = candidate_offsets
+                break
+        if offsets is None:
+            return None
 
-    def _next_entry_start(self, start: int):
-        limit = min(len(self.rom) - 8, start + 700)
+        # Later records live in their own bank-aligned chunks. Keep only substantial
+        # entry runs so unrelated text at a bank boundary cannot become a fake block.
+        search = ((offsets[-1] // 0x4000) + 1) * 0x4000
+        while len(offsets) < SPECIES_COUNT and search < len(self.rom):
+            bank_end = min(len(self.rom), search + 0x4000)
+            block, cursor = [], search
+            for _ in range(SPECIES_COUNT - len(offsets)):
+                block.append(cursor)
+                next_start = self._next_entry_start(cursor, bank_end)
+                if next_start is None:
+                    break
+                cursor = next_start
+            if 8 <= len(block) <= SPECIES_COUNT - len(offsets):
+                offsets.extend(block)
+            search += 0x4000
+        return tuple(offsets)
+
+    def _next_entry_start(self, start: int, bank_end: int | None = None):
+        limit = min(len(self.rom) - 8, start + 700, bank_end or len(self.rom))
         for candidate in range(start + 7, limit):
             if self.rom[candidate - 1] != 0x50:
                 continue
@@ -243,9 +274,9 @@ class Gold97RomData:
                 continue
             height = int.from_bytes(self.rom[name_end + 1:name_end + 3], "little")
             weight = int.from_bytes(self.rom[name_end + 3:name_end + 5], "little")
-            if not 10 <= height <= 999 or not 1 <= weight <= 9999:
+            if not 1 <= height <= 9999 or not 1 <= weight <= 99999:
                 continue
-            if self.rom[name_end + 5] in _GAME_CHARS:
+            if name_end + 5 < limit and self.rom[name_end + 5] in _GAME_CHARS:
                 return candidate
         return None
 
