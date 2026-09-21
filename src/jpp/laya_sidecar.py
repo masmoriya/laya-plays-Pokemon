@@ -57,7 +57,10 @@ class LayaService:
             }
         started = time.monotonic()
         with self._predict_lock:
-            result = self.agent.predict(state, _questions(options))
+            from .agent.tactical_context import pack_context
+            questions = _questions(options)
+            packed, context = pack_context(state, questions, self.agent)
+            result = self.agent.predict(packed, questions)
         answer = result["answers"]["next_action"]
         return {
             "action": answer["choice"],
@@ -67,6 +70,7 @@ class LayaService:
             "input_tokens": (result.get("usage") or {}).get("input_tokens", 0),
             "actual_cost_usd": 0.0,
             "latency_ms": round((time.monotonic() - started) * 1000, 1),
+            "model_input": {"state": packed, "questions": questions, "context": context},
         }
 
 
@@ -84,7 +88,8 @@ def serve(service, host=DEFAULT_HOST, port=DEFAULT_PORT):
             if self.path == "/":
                 self._send(200, {"service": "laya-sidecar", "health": "/health", "decision_endpoint": "/v1/decide"})
             elif self.path == "/health":
-                self._send(200, {"status": "ok", "model": service.model_name})
+                self._send(200, {"status": "ok", "model": service.model_name,
+                                 "context_packing_version": 1})
             else:
                 self._send(404, {"error": "not found"})
 
@@ -94,6 +99,9 @@ def serve(service, host=DEFAULT_HOST, port=DEFAULT_PORT):
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 262144:
+                    self._send(413, {"error": "Decision payload exceeds 256 KiB"})
+                    return
                 payload = json.loads(self.rfile.read(length))
                 self._send(200, service.decide(payload.get("state"), payload.get("options")))
             except (ValueError, json.JSONDecodeError, KeyError) as exc:

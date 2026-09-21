@@ -90,6 +90,15 @@ def test_laya_provider_accepts_low_confidence_legal_choice_by_default():
     assert answer["confidence"] == 0.0814
 
 
+def test_old_sidecar_cannot_silently_truncate_journey_context():
+    url, _, server = _sidecar({'action': 'a', 'confidence': .8, 'probabilities': {'a': .8}})
+    try:
+        with pytest.raises(RuntimeError, match='Restart the Laya sidecar'):
+            LayaProvider(url=url).decide_tactical({'journey': {}}, {'a': 'Confirm', 'b': 'Cancel'})
+    finally:
+        server.shutdown()
+
+
 def test_laya_provider_advances_single_legal_action_without_sidecar_call():
     provider = LayaProvider(url="http://127.0.0.1:1", timeout=0.01)
     answer = provider.decide_tactical({}, {"a": "advance dialogue"})

@@ -76,14 +76,14 @@ class Gold97BattleStrategy:
             return BattleAction('move', legal[0][0], 'No effective attack available')
         def rank(pair):
             i, e = pair
-            knockout = bool(hp and e.known and e.low >= hp)
+            knockout = bool(hp and e.bounded and e.low >= hp)
             return (knockout and e.accuracy >= .95, e.accuracy if knockout else 0,
                     min(hp, e.expected) if hp and e.known else e.expected, -i)
         index, best = max(damaging, key=rank)
         threat = incoming(opponent, active)
         # Defense reduction pays off only when the *whole* sequence is shorter
         # and the user can survive the extra turn. Unknown stats never justify it.
-        if hp and best.known and best.low < hp and threat:
+        if hp and best.bounded and best.low < hp and threat and threat.bounded:
             for i, _ in legal:
                 info = move_info(active.moves[i])
                 if not info or info['effect'] not in {'DEFENSE_DOWN', 'DEFENSE_DOWN_2'}:
@@ -94,7 +94,7 @@ class Gold97BattleStrategy:
                 setup = 255 / max(1, info['accuracy_byte']) + ceil(hp / max(1, lowered.expected))
                 if setup < direct and getattr(active, 'hp', 0) > threat.high * setup:
                     return BattleAction('move', i, 'Setup saves turns and survives retaliation')
-        reason = 'Attack: likely knockout' if hp and best.known and best.low >= hp else 'Attack: best useful damage'
+        reason = 'Attack: likely knockout' if hp and best.bounded and best.low >= hp else 'Attack: best nominal damage; modifiers uncertain'
         return BattleAction('move', index, reason)
 
     def plan(self, state, *, optional=False, forced=False):
@@ -140,7 +140,7 @@ class Gold97BattleStrategy:
             return BattleAction('stay', reason='Stay in: no clear switching benefit')
         chosen = estimate(active, foe, active.moves[attack.target]) if attack.target is not None else None
         faster = attack.target is not None and acts_first(active, foe, active.moves[attack.target])
-        if chosen and chosen.known and chosen.low >= getattr(foe, 'hp', 1) and chosen.accuracy >= .95 and faster:
+        if chosen and chosen.bounded and chosen.low >= getattr(foe, 'hp', 1) and chosen.accuracy >= .95 and faster:
             return attack
         if threat and active.hp <= threat.high:
             if replacement:

@@ -77,6 +77,8 @@ class LayaProvider:
             }
         model_input = {"state": state, "questions": _questions(options)}
         response = self._post({"state": state, "options": options})
+        if 'journey' in state and not (response.get('model_input') or {}).get('context'):
+            raise RuntimeError('Restart the Laya sidecar to enable budgeted journey context')
         action = response.get("action")
         if action not in options:
             raise ValueError("Laya action outside allowlist")
@@ -106,7 +108,7 @@ class LayaProvider:
             "actual_cost_usd": 0.0,
             "latency_ms": float(response.get("latency_ms") or 0.0),
             "commentary": "",
-            "model_input": model_input,
+            "model_input": response.get("model_input") or model_input,
         }
 
     def decide_strategy(self, state, memory):

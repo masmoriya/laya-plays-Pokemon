@@ -4,10 +4,11 @@ from time import monotonic
 from .journey_context import strategy_context, strategy_summary
 from .journey_knowledge import JourneyKnowledge, knowledge, record
 from .journey_strategy_provider import JourneyStrategyProvider, validate_plan
-from .journey_targets import candidates, paths, target_options
+from .journey_targets import target_options
+from .journey_planning import JourneyPlanning
 
 
-class JourneyStrategy:
+class JourneyStrategy(JourneyPlanning):
     def __init__(self, controller, provider=None, enabled=True):
         self.owner = controller
         self.default_enabled = enabled
@@ -32,6 +33,8 @@ class JourneyStrategy:
         self.retry_at = 0
         self.provider_failures = 0
         self.plan_started_at = 0
+        self.last_transition_target = None
+        self.recovery_retry_at = 0
 
     @property
     def data(self):
@@ -54,6 +57,7 @@ class JourneyStrategy:
         self.owner._set_provider_event(reason + '; continuing with Laya')
 
     def invalidate(self):
+        self.recovery_retry_at = 0
         self.generation += 1
         if self.future:
             if not self.future.cancel():
@@ -106,6 +110,7 @@ class JourneyStrategy:
             if current != self.goal:
                 self.maps_since_evidence.clear()
             elif overworld and key != self.map_key:
+                self.last_transition_target = self.target
                 self.maps_since_evidence.append(key)
                 self.maps_since_evidence = self.maps_since_evidence[-12:]
             self.goal, self.map_key = current, key
@@ -117,6 +122,7 @@ class JourneyStrategy:
             if ((pending and not self.observations.pending) or
                     (not self.target and not self.future and not self.observations.pending)):
                 self.failures = 0
+                self.excluded.clear()
                 self.owner.movement_history.points.clear()
                 self.maps_since_evidence.clear()
                 self.invalidate()
@@ -131,17 +137,22 @@ class JourneyStrategy:
                 self.invalidate()
 
     def failed(self, reason):
-        if self.target:
-            self.excluded.add(self.target["id"])
+        target = self.target or self.last_transition_target
+        if target:
+            self.excluded.add(target["id"])
+            self.owner.memory.experience.fail(self.owner.route.now, target, reason)
         self.failures += 1
         record(self.owner.memory, "loop_recovery", reason)
         self.invalidate()
         self.owner.movement_history.points.clear()
-        if self.failures >= 4:
-            self.owner.pause("Journey blocked after four distinct recovery plans. Retry or inspect the map.")
+        self.last_transition_target = None
+        self.status = "recovering"
+        self.owner._set_provider_event("Replanning toward the current journey objective")
 
     def options(self, state, terrain):
         self.position = [state.x, state.y]
+        durable = {key for item in self.owner.memory.experience.failures(self.owner.route.now)
+                   for key in (item['target'], item['target_key'])}
         if self.owner.movement_history.looping:
             self.failed("Repeated movement without new evidence")
         if self.owner.paused:
@@ -163,12 +174,14 @@ class JourneyStrategy:
                 return {}
         if self.future:
             if not self.future.done():
-                if monotonic() - self.plan_started_at < 5:
+                deadline = getattr(self.provider, 'timeout', 60)
+                if monotonic() - self.plan_started_at < deadline:
                     return {}
                 future, self.future = self.future, None
                 if not future.cancel():
                     self.retired.append(("plan", future))
-                self.provider_failed("Luna planning exceeded five seconds")
+                self.owner.memory.experience.record('planner_timeout', deadline=deadline)
+                self.provider_failed(f"Luna planning exceeded {deadline:g} seconds")
                 return self.options(state, terrain)
             future, self.future = self.future, None
             try:
@@ -183,78 +196,13 @@ class JourneyStrategy:
                 return self.options(state, terrain)
             self.target = next(c for c in self.payload["candidates"] if c["id"] == plan["target"])
             self.data["plan"] = plan
+            self.owner.memory.experience.record('planner_accepted', plan=plan, usage=usage)
             self.status = "ready"
             self.provider_failures = 0
             record(self.owner.memory, "plan", plan["explanation"])
             self.owner._set_provider_event(f"Next: {plan['explanation']}")
             return self.options(state, terrain)
-        available = candidates(
-            state, self.owner.memory, terrain, excluded=self.excluded,
-            reward_weights=self.owner.rewards.weights,
-        )
-        # A timed-out step or a moving sprite can leave all exits remembered
-        # as blocked. Recheck the current tile once, using cartridge collision
-        # data and observed sprites as the authority for the retry.
-        key = f"{state.map_group:02X}:{state.map_number:02X}"
-        position = (state.x, state.y)
-        retry_key = (key, position)
-        if (not available and terrain is not None
-                and retry_key not in self.rechecked_positions
-                and len(paths(state, self.owner.memory, terrain)) == 1
-                and any(edge[0] == list(position)
-                        for edge in self.owner.memory.map(key)["blocked"])):
-            self.rechecked_positions.add(retry_key)
-            self.owner.memory.clear_blocked_at(key, position)
-            available = candidates(
-                state, self.owner.memory, terrain, excluded=self.excluded,
-                reward_weights=self.owner.rewards.weights,
-            )
-        if not available:
-            self.owner.pause("No reachable local leads or verified guide route. Inspect the map, then Retry.")
-            return {}
-        self.payload = self.context(state)
-        self.payload["candidates"] = available
-        milestone_reward = self.owner.rewards.weights["milestone"]
-        runner_up = available[1].get("journey_reward", 0) if len(available) > 1 else -1
-        if (available[0].get("journey_reward", 0) >= milestone_reward
-                and runner_up < available[0]["journey_reward"]):
-            self.target = available[0]
-            self.status = "ready"
-            self.data["plan"] = {"target": self.target["id"],
-                                 "explanation": self.target["label"],
-                                 "completion": self.target["completion"],
-                                 "evidence": [self.target["id"]]}
-            record(self.owner.memory, "journey_priority", self.target["label"],
-                   reward=self.target["journey_reward"])
-            return self.options(state, terrain)
-        if self.use_luna:
-            for target in available:
-                if target.get("source"):
-                    record(self.owner.memory, "guide", target["label"], source=target["source"])
-            self.status = "planning"
-            self.plan_started_at = monotonic()
-            model_input = getattr(self.provider, "model_input", None)
-            if callable(model_input):
-                self.owner.latest_model_input = {
-                    "provider": "Luna",
-                    **model_input(self.payload),
-                }
-                self.owner._set_provider_event(
-                    f"Luna input · strategy · {len(available)} candidates"
-                )
-            self.future = self.owner.executor.submit(self.provider.plan, self.payload)
-            return {}
-        # Laya receives all reachable tasks; it selects the task and its next legal
-        # control together. No Luna-produced plan remains active in this mode.
-        options = {}
-        self.local_targets = {}
-        for target in available:
-            for action, label in target_options(target, state, self.owner.memory, terrain).items():
-                if action == "a":
-                    continue  # First commit the task and establish facing.
-                options.setdefault(action, label)
-                self.local_targets.setdefault(action, target)
-        return options
+        return self.plan_next(state, terrain, durable)
 
     def chosen(self, action):
         if not self.target and not self.use_luna:

@@ -32,8 +32,11 @@ the existing manual confirmation control.
 
 Transient Laya failures retain Play intent and retry automatically with capped backoff.
 Luna failures continue with Laya/local choices while retrying; Luna Off stays off.
-Repeated failed route recovery remains visibly blocked. Manual Pause cancels Play intent
-and pending actions. Restore, manual milestone changes, and mode changes invalidate
+Failed route recovery keeps Play active and seeks fresh reachable leads. Once those
+are exhausted, it rechecks the oldest failed approaches without erasing experience,
+or revisits reachable ground for new observations. With no reachable movement it
+rechecks every two seconds, preserving collision checks and the current milestone.
+Manual Pause cancels Play intent and pending actions. Restore, manual milestone changes, and mode changes invalidate
 pending tactical and strategic answers. Recovery never automatically rewinds saves.
 See [progress and recovery](laya-progress.md) for the reward ledger and bounded replays.
 

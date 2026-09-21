@@ -65,15 +65,15 @@ def test_fixed_damage_immunity_and_false_swipe():
     assert estimate(attacker, replace(foe, level=30), 'GUILLOTINE').accuracy == 0
 
 
-def test_setup_requires_shorter_complete_sequence():
+def test_setup_is_not_justified_by_nominal_damage_without_modifiers():
     active = mon(hp=999, max_hp=999, moves=('SCREECH', 'TACKLE'), pp=(20, 30),
                  stats=(30, 999, 40, 30, 999), types=('NORMAL',))
     foe = mon(0, hp=100, max_hp=100, stats=(1, 80, 10, 1, 80), types=('NORMAL',),
               moves=('TACKLE',), pp=(30,))
     planner = Gold97BattleStrategy()
-    assert planner.attack(active, foe).target == 0
-    # Merely planning does not mark setup used; the observed stage does.
-    assert planner.attack(active, foe).target == 0
+    assert planner.attack(active, foe).target == 1
+    # Repeated planning cannot make missing modifier evidence become certain.
+    assert planner.attack(active, foe).target == 1
     assert planner.attack(active, replace(foe, stages=(0, -6, 0, 0, 0, 0, 0))).target == 1
 
 

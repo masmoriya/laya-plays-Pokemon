@@ -68,29 +68,30 @@ def test_unverified_or_transitional_positions_do_not_claim_discoveries(memory, c
     assert '09:03' not in ledger.data['discovered_maps']
 
 
-def test_new_exit_precedes_local_exploration_and_removes_return(memory):
+def test_optional_new_exit_does_not_remove_useful_return(memory):
     memory.visited('09:01', (1, 1))
     memory.visited('09:02', (1, 1))
     s = state(map_exits=((0, 1, 'left', 9, 1), (5, 1, 'right', 9, 3)))
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
     targets = candidates(s, memory, terrain)
-    assert targets[0]['destination'] == '09:03'
-    assert targets[0]['unvisited_destination']
-    assert not any(t.get('destination') == '09:01' for t in targets)
+    assert targets[0]['destination_key'] == '09:01'
+    assert any(t.get('destination_key') == '09:03' and t['unvisited_destination'] for t in targets)
+    assert any(t.get('destination_key') == '09:01' for t in targets)
     assert any(t['kind'] == 'explore' for t in targets)
     memory.visited('09:03', (1, 1))
     targets = candidates(s, memory, terrain)
-    assert {t['destination'] for t in targets if t['kind'] == 'exit'} == {'09:01', '09:03'}
+    assert {t['destination_key'] for t in targets if t['kind'] == 'exit'} == {'09:01', '09:03'}
 
 
-def test_observed_return_connection_cannot_bypass_new_exit_preference(memory):
+def test_observed_return_connection_preserves_destination_identity(memory):
     memory.world['journey_strategy']['connections'] = [
         {'from': '09:01', 'to': '09:02', 'at': [5, 1],
          'arrival': [0, 1], 'direction': 'right'}]
     s = state(map_exits=((0, 1, 'left', 9, 1), (5, 1, 'right', 9, 3)))
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
     exits = [t for t in candidates(s, memory, terrain) if t['kind'] == 'exit']
-    assert [t['destination'] for t in exits] == ['09:03']
+    assert {t['destination_key'] for t in exits} == {'09:01', '09:03'}
+    assert all(t['destination'] != t['destination_key'] for t in exits)
 
 
 def test_unreachable_new_exit_does_not_suppress_only_way_back(memory):
@@ -100,4 +101,4 @@ def test_unreachable_new_exit_does_not_suppress_only_way_back(memory):
     cells[11] = 7
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(cells))
     exits = [t for t in candidates(s, memory, terrain) if t['kind'] == 'exit']
-    assert [t['destination'] for t in exits] == ['09:01']
+    assert [t['destination_key'] for t in exits] == ['09:01']

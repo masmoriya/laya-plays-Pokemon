@@ -21,6 +21,7 @@ def record(memory, kind, detail, **extra):
     stats = data["stats"].setdefault(mode, {})
     stats[kind] = stats.get(kind, 0) + 1
     memory.save()
+    memory.experience.record(kind, detail=detail, mode=mode, **extra)
 
 
 class JourneyKnowledge:
@@ -163,6 +164,7 @@ class JourneyKnowledge:
                                   "interaction": self.pending["id"],
                                   "cell": list(npc["cell"]) if npc else None})
         self.data["next_clue_id"] += 1
+        self.memory.experience.record('clue', clue=self.data['clues'][-1])
         return True
 
     def interacted(self, identifier):

@@ -8,7 +8,7 @@ import pytest
 
 from jpp.agent.gold97_controller import Gold97Controller
 from jpp.agent.gold97_input import press_action, release_restored_buttons, renew_movement
-from jpp.agent.gold97_services import fully_recovered
+from jpp.agent.gold97_services import fully_recovered, is_center
 from jpp.gold97_adapter import Gold97Adapter
 from jpp.gold97_collision import Gold97CollisionCache
 from jpp.terrain_capture import overworld_ready, visible_prompt
@@ -32,6 +32,7 @@ def test_nurse_heals_across_counter(tmp_path, approach):
     cache = Gold97CollisionCache()
     active = None
     actions = []
+    heal_attempts = 0
     try:
         with Path(checkpoint).open('rb') as handle:
             emulator.load_state(handle)
@@ -46,7 +47,7 @@ def test_nurse_heals_across_counter(tmp_path, approach):
         assert not fully_recovered(adapter.snapshot(emulator).state)
         for frame in range(2400):
             state = adapter.snapshot(emulator).state
-            if fully_recovered(state):
+            if fully_recovered(state) and not is_center(state):
                 break
             terrain = cache.update(emulator, state)
             overworld = overworld_ready(emulator, state) and cache.ready
@@ -54,6 +55,7 @@ def test_nurse_heals_across_counter(tmp_path, approach):
                 state, frame=emulator.screen.ndarray, overworld=overworld,
                 terrain=terrain, prompt_visible=(visible_prompt(emulator, state)
                                                 if cache.ready and not overworld else False))
+            heal_attempts = max(heal_attempts, (controller.recovery or {}).get('attempts', 0))
             assert not controller.paused, (controller.pause_reason, actions, state.x, state.y)
             pressed = False
             if action:
@@ -70,6 +72,12 @@ def test_nurse_heals_across_counter(tmp_path, approach):
             emulator.tick(1)
         assert any(action == 'a' for _, action in actions), actions
         assert fully_recovered(state), actions
+        assert heal_attempts == 1, actions
+        assert not is_center(state), actions
+        # Finishing the visit must not immediately schedule another one.
+        for _ in range(3):
+            assert controller._recovery_action(state, overworld=True) is None
+            assert controller.recovery is None
     finally:
         controller.close()
         emulator.stop(save=False)

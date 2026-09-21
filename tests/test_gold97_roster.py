@@ -77,7 +77,7 @@ def test_sacrifice_requires_verified_damage_and_finisher():
     foe = mon('foe', hp=70, moves=('DRAGON RAGE',), stats=(50,40,20,40,40))
     finisher = mon('b', hp=1, moves=('DRAGON RAGE',), stats=(50,40,90,40,40))
     s = NS(battle=Battle('trainer',active,foe), active_slot=0,party=(active,finisher))
-    assert sacrifice_line(s, BattleAction('move',0)).reason.startswith('Tactical sacrifice')
+    assert sacrifice_line(s, BattleAction('move',0)) is None  # Volatile conditions are not decoded.
     s.battle=Battle('trainer',active,replace(foe,moves=('COUNTER',), pp=(20,)))
     assert sacrifice_line(s, BattleAction('move',0)) is None
     s.battle=Battle('wild',active,foe)

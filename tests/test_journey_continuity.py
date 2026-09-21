@@ -115,7 +115,7 @@ def test_slow_plan_releases_control_and_late_answer_cannot_take_over(owner, monk
     future.set_running_or_notify_cancel()
     strategy.future = future
     strategy.plan_started_at = 10
-    monkeypatch.setattr('jpp.agent.journey_strategy.monotonic', lambda: 16)
+    monkeypatch.setattr('jpp.agent.journey_strategy.monotonic', lambda: 71)
     terrain = Gold97CollisionMap((9, 2), 40, 36, bytes(1440))
     assert strategy.options(s, terrain)
     assert strategy.future is None and strategy.target is None

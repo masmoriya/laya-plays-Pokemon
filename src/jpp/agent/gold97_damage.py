@@ -10,6 +10,9 @@ class Estimate:
     accuracy: float
     known: bool
     turns: int = 1
+    # Stats being readable does not prove that screens/weather/volatile effects
+    # are absent. The adapter does not yet verify those modifiers.
+    bounded: bool = False
 
     @property
     def expected(self):

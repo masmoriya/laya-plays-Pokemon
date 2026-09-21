@@ -34,10 +34,16 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
         specific = {term for term in overlap - _GENERIC if not term.isdigit()}
         reward = _BASE_REWARD.get(candidate.get("kind"), 0)
         reasons = [f"{candidate.get('kind', 'task')} base {reward}"]
-        if overlap:
+        destination_terms = _terms(candidate.get('destination', ''))
+        identified = bool(destination_terms - _GENERIC)
+        exact_destination = bool(candidate.get('destination_key') and identified
+                                 and destination_terms <= goal_terms)
+        if exact_destination:
             reward += milestone_reward
-            reward += 20 * len(specific)
-            reasons.append("goal match: " + ", ".join(sorted(overlap)))
+            reasons.append('explicit goal destination')
+        elif specific:
+            reward += min(20, 5 * len(specific))
+            reasons.append('weak text hint: ' + ', '.join(sorted(specific)))
         if candidate.get("source"):
             reward += 10
             reasons.append("verified route evidence")
@@ -51,6 +57,7 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
             reward -= milestone_reward
             reasons.append("unrelated optional/service area")
         enriched = {**candidate, "journey_reward": max(0, reward),
+                    "goal_destination": exact_destination,
                     "reward_reason": "; ".join(reasons), "_rank_order": order}
         ranked.append(enriched)
     ranked.sort(key=lambda item: (-item["journey_reward"], item["_rank_order"]))

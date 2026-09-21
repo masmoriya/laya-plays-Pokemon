@@ -9,6 +9,7 @@ from .gold97_navigation import STEPS
 from .gold97_rewards import DEFAULT_WEIGHTS
 from .gold97_services import CENTER_RETREAT_EXITS
 from .journey_guidance import rank_candidates
+from .experience import target_key
 
 
 def paths(state, memory, terrain):
@@ -152,6 +153,7 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
                            "completion": "Observe a map transition"})
     goal = MAIN.get(milestone, "Continue journey")
     weights = reward_weights or DEFAULT_WEIGHTS
+    result = [item for item in result if target_key(item) not in excluded]
     ranked = rank_candidates(result, goal, weights["milestone"], state.area_name)
     return prefer_discovery(ranked, memory)
 

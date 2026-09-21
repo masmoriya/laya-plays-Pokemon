@@ -31,11 +31,15 @@ def strategy_context(self, state):
             "map": state.area_name,
             "candidates": (self.payload or {}).get("candidates", []),
             "clues": relevant[-20:] + clues[-20:],
+            "failed_attempts": self.owner.memory.experience.failures(self.owner.route.now)[-6:],
             "interactions": [{**npc, "pages": npc["pages"][-2:]}
-                             for npc in self.data["npcs"].values()],
+                             for npc in list(self.data["npcs"].values())
+                             if npc['map'] == f'{state.map_group:02X}:{state.map_number:02X}'][-12:],
             "team": {"training": self.owner.training.summary(state, self.owner.rewards.weights), "party": [{"species": m.species, "level": m.level, "hp": m.hp} for m in getattr(state, "party", ())],
                      "rewards": self.owner.rewards.summary()},
-            "connections": self.data["connections"], "recent": self.data["events"][-12:],
+            "connections": [c for c in self.data['connections']
+                            if f'{state.map_group:02X}:{state.map_number:02X}' in (c['from'], c['to'])][-12:],
+            "recent": self.data["events"][-12:],
             "questions": ["Which candidate has the strongest verified Journey reward?",
                           "What observable result proves progress toward this milestone?"]}
 

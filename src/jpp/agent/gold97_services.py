@@ -108,7 +108,7 @@ def needs_healing(state, threshold=HEAL_AT_HP_FRACTION):
                getattr(mon, "hp", 0) <= 0 or
                (getattr(mon, "max_hp", 0) and
                 getattr(mon, "hp", 0) / mon.max_hp <= threshold)
-               for mon in party)
+               for mon in party if getattr(mon, 'species', '') != 'EGG')
 
 
 def novel_capture(state, foe):
@@ -142,6 +142,10 @@ def _exhausted_attacks(mon):
 
 def fully_recovered(state):
     for mon in getattr(state, 'party', ()):
+        # The adapter gives Eggs zero HP to exclude them from battle options.
+        # Nurse Joy cannot restore that sentinel; only hatched party members heal.
+        if getattr(mon, 'species', '') == 'EGG':
+            continue
         if mon.hp != mon.max_hp or getattr(mon, 'status', 'none') != 'none':
             return False
         pp, maximum = getattr(mon, 'pp', ()), getattr(mon, 'max_pp', ())

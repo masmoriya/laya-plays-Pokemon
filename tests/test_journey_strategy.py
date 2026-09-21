@@ -127,7 +127,7 @@ def test_fresh_luna_plan_after_toggle_and_no_stale_goal(controller):
     assert controller.opening_goal is None
 
 
-def test_four_failed_recoveries_pause_and_successful_subgoal_resets(controller):
+def test_recovery_continues_beyond_four_failures(controller):
     strategy = controller.strategy
     strategy.failed("loop one")
     assert not controller.paused
@@ -135,9 +135,15 @@ def test_four_failed_recoveries_pause_and_successful_subgoal_resets(controller):
     assert not controller.paused
     strategy.failed("loop three")
     strategy.failed("loop four")
-    assert controller.paused
+    assert not controller.paused
+    for index in range(8):
+        strategy.failed(f"additional loop {index}")
+    assert not controller.paused
     assert controller.held_action is None
-    assert strategy.data["stats"]["luna_off"]["loop_recovery"] == 4
+    assert strategy.data["stats"]["luna_off"]["loop_recovery"] == 12
+    s = state()
+    strategy.observe(s, (), True)
+    assert strategy.options(s, Gold97CollisionMap((9, 2), 6, 6, bytes(36)))
 
 
 def test_known_completed_tower_exit_replaces_climb(controller):
@@ -212,7 +218,8 @@ def test_goal_terms_rank_matching_map_without_a_story_specific_override(controll
     tasks = candidates(s, controller.memory, terrain)
     assert tasks[0]["destination"] == "Bills Familys House"
     assert tasks[0]["cell"] == [30, 22]
-    assert tasks[0]["journey_reward"] >= 100
+    assert 25 < tasks[0]["journey_reward"] < 100
+    assert not tasks[0]["goal_destination"]
     assert not tasks[0]["id"].startswith("guide:")
 
 
@@ -362,7 +369,7 @@ def test_discovery_does_not_interrupt_a_committed_route_or_mark_an_obstacle(cont
     assert controller.memory.map("09:02")["blocked"] == []
 
 
-def test_stale_blocked_exits_are_rechecked_once(controller):
+def test_stale_blocked_exits_are_rechecked_automatically(controller, monkeypatch):
     s = state()
     strategy = controller.strategy
     strategy.observe(s, (), True)
@@ -376,11 +383,13 @@ def test_stale_blocked_exits_are_rechecked_once(controller):
     assert strategy.options(s, terrain)
     assert not controller.paused
     assert not area['blocked']
-    # If attempts really fail again, stop instead of endlessly retrying.
+    # Repeated failures back off, then retry without manual resume.
     area['blocked'] = blocked.copy()
     assert not strategy.options(s, terrain)
-    assert controller.paused
-    controller.resume()
+    assert not controller.paused
+    assert not strategy.options(s, terrain)
+    monkeypatch.setattr("jpp.agent.journey_planning.monotonic",
+                        lambda: strategy.recovery_retry_at + 1)
     assert strategy.options(s, terrain)
     assert not controller.paused
 
@@ -394,4 +403,5 @@ def test_blocked_exit_retry_preserves_cartridge_walls(controller):
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes([7] * 36))
     controller.memory.map('09:02')['blocked'] = [[[s.x, s.y], 'up']]
     assert not strategy.options(s, terrain)
-    assert controller.paused
+    assert not controller.paused
+    assert strategy.status == "recovering"
