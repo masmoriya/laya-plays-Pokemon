@@ -116,10 +116,24 @@ choice. Set a positive confidence threshold only when you explicitly want strict
 Set `LAYA_HOST`, `LAYA_PORT`, `LAYA_MODEL`, and `LAYA_DEVICE` for the sidecar. It never
 downloads model weights while gameplay is running.
 
-Laya chooses all movement, menu, and battle controls. If a ROM screen contains text that
-the RAM adapter cannot decode, set `LAYA_VISION=1` to enable the optional Luna screen
-transcriber; Luna only supplies visible text and never chooses controls. Jev is not used
-by the Laya path.
+For an existing checkpoint on an external drive, create the ignored machine-local
+`config/laya.local.json` instead of downloading it again:
+
+```json
+{"model_path": "/Volumes/FILM_EXT/laya-models/multilingual", "device": "cpu"}
+```
+
+Environment variables override these local settings. Keep the drive mounted.
+
+When a model path is configured, the game client starts a local sidecar automatically if the
+configured endpoint is not listening. Set `LAYA_AUTOSTART=0` to keep the sidecar as a
+separately managed process. Without a downloaded checkpoint, the live panel reports the
+missing `LAYA_MODEL_PATH` instead of hiding the setup problem behind a bare connection error.
+
+Laya chooses movement, menu, and battle controls. Luna plans Journey investigations and can read uncertain screens, but never presses
+buttons. Use the Luna strategy On/Off button beside playback to compare modes. Set `LAYA_VISION=0` to disable Codex model
+calls. Navigation still tests safe, in-bounds directions if Luna is unavailable.
+Jev is not used by the Laya path.
 
 Bring your own ROM. This repo contains no game data and will not help you find any. Save
 states hold copyrighted memory, so they stay out of git.
@@ -217,26 +231,47 @@ AGENT_PROVIDER=laya uv run jpp live --provider laya --rom '/path/to/Gold 97 Refo
 AGENT_PROVIDER=fake uv run jpp play --rom /path/to/your/red.gb --headless
 ```
 
-Laya is local and does not require an OpenAI account, OAuth, or Jev. Luna remains an optional
-Codex CLI screen reader for future providers; it never chooses controls in the Laya path.
+Laya's tactical sidecar is local. Luna is the optional Codex CLI strategy and screen
+provider. `LAYA_VISION=0` defaults new runs to Luna Off; the per-run UI preference is
+persisted. The Luna strategy toggle disables both planning and screen calls. Luna
+chooses investigations; Laya selects legal controls.
+
+Luna uses the Codex CLI's ChatGPT login, not an OpenAI API key. Verify or start that
+browser-based login before launching the game:
+
+```
+codex login status
+codex login
+```
+
+`Luna strategy On` is persisted per run. Exact cartridge-guided movement may execute
+without a model call; Luna is reserved for choices that actually need strategy or vision.
 
 Gold 97 Reforged now uses a Laya-led controller for headless `play`. In the local `live`
 window, press F2 or use Play Laya to opt in; F2, Pause Laya, or holding a movement key
 returns to manual control. The controller sends verified cartridge state and legal
-actions to Laya; no remote model chooses controls. If Laya is unavailable, autonomous
-play pauses with the sidecar error visible in the live panel. The agent receives the
-current Journey milestone, but the full route is not yet an autonomous navigation plan.
-It remembers explored coordinates, failed steps, exits, and
-short factual clues per run; restoring a checkpoint restores that memory when available.
+actions to Laya; no remote model chooses controls. Transient Laya failures preserve Play intent and retry automatically with backoff capped at 30 seconds; manual Pause cancels that intent.
+Luna strategy is On by default; Off makes no new Luna planning or screen-reading calls.
+The current Journey milestone drives reachable NPC, exploration, and exit tasks. The
+agent remembers conversations and outcomes across maps, replans when evidence changes,
+and pauses after repeated failed recovery. The toggle retains learned facts, so it is a
+same-run comparison, not a fresh-memory benchmark. See [Journey strategy](docs/journey-strategy.md)
+for the decision boundary, guide coverage, and verification limits.
 
-Ordinary wild encounters are passed to the battle controller with an instruction to flee;
-the full-game battle and route policy still needs end-to-end validation.
-Older species may be caught only in a static sprite encounter. The controller takes a
-checkpoint before interacting with an adjacent sprite and restores it after a failed
-static capture, up to three times. Ordinary old-species wild battles pause for manual
-handling because the Gold battle menu is not yet decoded well enough to prove a safe
-automatic flee command. This is an intentional safety limit, not an automatic win or a
-complete autonomous playthrough.
+Wild encounters use capture, training, combat, or escape according to eligibility and survival.
+Healthy trainees can lead and switch to a stronger partner for verified battle XP.
+Deliberate training stops after five encounters or five emulated minutes and resumes the journey.
+The compact points total rewards verified progress and cannot be farmed by restoring a checkpoint.
+See [Laya progress and recovery](docs/laya-progress.md) for rewards, roster handling, and replay limits.
+Visible item balls become temporary goals: the controller routes to a neighboring tile,
+tries the pickup, and only then resumes the current journey milestone. That detour runs
+before deterministic story navigation, so a useful item is not skipped just because the
+next city or badge is already targeted. Unknown sprites are not guessed as items; an
+adjacent visible object still receives one safe interaction attempt.
+Older species may be caught only in a static sprite encounter. Failed static captures
+remain visibly blocked for inspection; recovery never automatically rewinds saves.
+PC transfers and party reordering use verified menus and roster checks. Release is
+never selected. Full-game battle and route behavior still needs end-to-end validation.
 
 ## How it works
 
