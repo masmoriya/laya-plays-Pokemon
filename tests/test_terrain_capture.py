@@ -3,7 +3,8 @@ from collections import defaultdict
 
 import numpy as np
 
-from jpp.terrain_capture import WorldCamera, visible_background, visible_entities, visible_player
+from jpp.terrain_capture import (WorldCamera, overworld_ready, visible_background,
+                                 visible_entities, visible_player, visible_prompt)
 
 
 class _Memory(defaultdict):
@@ -66,6 +67,40 @@ def test_menu_battle_and_window_frames_never_enter_map():
     assert not visible_background(textbox, _state())
 
 
+def test_walk_input_can_resume_before_camera_alignment_but_not_during_text():
+    emulator = _emulator()
+    emulator.screen.get_tilemap_position = lambda: ((3, 0), (160, 144))
+    assert not visible_background(emulator, _state())
+    assert overworld_ready(emulator, _state())
+
+    map_art = _state()
+    map_art.screen_lines = ("",) * 14 + ("QQ bQ QQ",) + ("",) * 3
+    assert overworld_ready(emulator, map_art)
+    assert not visible_prompt(emulator, map_art)
+
+    dialogue = _state()
+    dialogue.screen_lines = ("",) * 14 + ("Please come in",) + ("",) * 3
+    emulator.screen.ndarray[-40:, :, :3] = 255
+    assert not overworld_ready(emulator, dialogue)
+    assert visible_prompt(emulator, dialogue)
+    assert not overworld_ready(_emulator(white=True), _state())
+
+
+def test_fade_or_blank_transition_does_not_confirm_stale_text():
+    emulator = _emulator(white=True)
+    state = _state()
+    state.screen_lines = ("",) * 14 + ("Old battle text",) + ("",) * 3
+    assert not overworld_ready(emulator, state)
+    assert not visible_prompt(emulator, state)
+
+
+def test_map_loading_window_does_not_confirm_stale_text():
+    emulator = _emulator(window=(0, 0))
+    state = _state()
+    state.screen_lines = ("",) * 14 + ("Old NPC text",) + ("",) * 3
+    assert not visible_prompt(emulator, state)
+
+
 def test_live_npc_sprite_layer_is_separate_from_persisted_terrain():
     emulator = _emulator()
     for index, (x, y) in enumerate(((80, 64), (88, 64), (80, 72), (88, 72)), start=4):
@@ -84,6 +119,23 @@ def test_live_npc_sprite_layer_is_separate_from_persisted_terrain():
     assert (entities[0].pixel_x, entities[0].pixel_y) == (144, 120)
     assert len(entities[0].rgba) == 1024
     assert entities[0].rgba[3] == 180  # screen alpha in the synthetic frame
+
+
+def test_gold97_item_ball_object_is_tagged_without_pixel_guessing():
+    emulator = _emulator()
+    state = _state()
+    state.map_group, state.map_number = 20, 2
+    state.map_width, state.map_height = 52, 38
+    base = 0xD723 + 16
+    emulator.memory[1, base] = 1
+    emulator.memory[1, base + 1] = 0x54
+    emulator.memory[1, base + 2] = state.y + 4
+    emulator.memory[1, base + 3] = state.x + 5
+    emulator.memory[1, base + 8] = 1
+    entities = visible_entities(emulator, state)
+    items = [entity for entity in entities if entity.kind == "item"]
+    assert len(items) == 1
+    assert (items[0].pixel_x, items[0].pixel_y) == ((state.x + 1) * 16, state.y * 16)
 
 
 def test_player_sprite_uses_current_oam_pixels_only_on_overworld():

@@ -33,6 +33,17 @@ def test_no_held_buttons_do_not_send_input():
     assert emulator.presses == []
 
 
+def test_a_is_a_bounded_tap(monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    emulator = FakeEmulator()
+    held = set()
+
+    handle_keydown(SimpleNamespace(key=pygame.K_z), emulator, held,
+                   lambda _: None, 1.0)
+    assert held == set()
+    assert emulator.presses == [("a", 4)]
+
+
 def test_speed_controls_walk_the_supported_steps_and_clamp():
     assert _adjust_speed(1.0, -1) == 0.5
     assert _adjust_speed(0.25, -1) == SPEEDS[0]
@@ -44,6 +55,19 @@ def test_speed_key_only_changes_the_frame_pacer_setting(monkeypatch):
     emulator = FakeEmulator()  # no PyBoy throttle API should be called
     speed = handle_keydown(SimpleNamespace(key=pygame.K_2), emulator, set(), lambda _: None, 1.0)
     assert speed == 2.0
+
+
+def test_ctrl_l_toggles_laya_playback(monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
+    emulator = FakeEmulator()
+    actions = []
+
+    speed = handle_keydown(SimpleNamespace(key=pygame.K_l), emulator, set(),
+                           actions.append, 1.0)
+
+    assert speed == 1.0
+    assert actions == ["toggle_jev"]
+    assert emulator.presses == []
 
 
 def test_live_resumes_snapshots_by_default_and_can_start_fresh():

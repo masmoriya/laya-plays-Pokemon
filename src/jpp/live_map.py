@@ -1,8 +1,9 @@
-"""Stable full-area observed map with remembered character markers."""
+"""Live navigation grid with optional explored artwork."""
 
 import pygame
 
-from .live_ui_colors import BG, MUTED, PANEL, TEXT, WARN
+from .live_ui_colors import BG, GOOD, MUTED, PANEL, TEXT, WARN
+from .live_map_grid import MapGrid
 
 
 class LiveMap:
@@ -10,18 +11,36 @@ class LiveMap:
         self.ui = ui
         self._cache_key = None
         self._terrain = None
+        self.grid = MapGrid(ui)
 
     def draw(self, state, journey):
         box = pygame.Rect(994, 176, 422, 382)
         pygame.draw.rect(self.ui.canvas, PANEL, box, border_radius=6)
-        self.ui.text("Explored map", (box.x + 14, box.y + 12), self.ui.small, MUTED)
+        self.ui.text("Navigation" if self.ui.map_mode == "grid" else "Explored imagery", (box.x + 14, box.y + 12), self.ui.small, MUTED)
         name = getattr(state, "area_name", None) or "Area unavailable"
         locality = getattr(state, "locality", "")
         label = f"{locality} · {name}" if locality and locality not in name else name
         self.ui.text(label, (box.x + 14, box.y + 33), self.ui.body_bold, TEXT,
                      max_width=box.width - 28)
         view = pygame.Rect(box.x + 14, box.y + 64, box.width - 28, box.height - 100)
-        self._area(state, journey, view)
+        view.height -= 23
+        snapshot = self.ui.map_state.snapshot
+        if snapshot is None:
+            self.ui.text(self.ui.map_state.status, view.center, self.ui.small, MUTED, center=True)
+        elif self.ui.map_mode == "grid":
+            self.grid.draw(snapshot, view)
+        else:
+            self._area(state, journey, view)
+        for label, color, offset in (("Walk", MUTED, 0), ("Blocked", BG, 65),
+                                     ("Ledge / entity", WARN, 143), ("You", GOOD, 267),
+                                     ("Goal", TEXT, 321)):
+            x = box.x + 14 + offset
+            pygame.draw.rect(self.ui.canvas, color, (x, box.bottom - 53, 7, 7))
+            self.ui.text(label, (x + 11, box.bottom - 57), self.ui.tiny, MUTED)
+        for mode, label, x, width in (("grid", "Grid", box.right - 145, 48),
+                                       ("artwork", "Artwork", box.right - 91, 77)):
+            self.ui.button(f"map_{mode}", label, pygame.Rect(x, box.y + 9, width, 23),
+                           TEXT if self.ui.map_mode == mode else MUTED)
         self.ui.button("map_details", "Hide" if self.ui.map_details else "Details",
                        pygame.Rect(box.x + 14, box.bottom - 30, 70, 23), MUTED)
         if self.ui.map_details:
@@ -58,42 +77,14 @@ class LiveMap:
         target = pygame.Rect(0, 0, *size)
         target.center = view.center
         self.ui.canvas.blit(pygame.transform.scale(self._terrain.subsurface(source), size), target)
-        previous_clip = self.ui.canvas.get_clip()
-        self.ui.canvas.set_clip(view)
-        location = self._location_rect(state, map_key, target, source, scale)
-        for entity in self.ui.map_entities:
-            if entity.map_key == map_key and self._in_bounds(entity, columns, rows):
-                self._sprite(target, source, scale, entity.pixel_x, entity.pixel_y, entity.rgba)
-        player = getattr(self.ui, "player_marker", None)
-        if player and player.map_key == map_key:
-            self._sprite(target, source, scale, player.pixel_x, player.pixel_y, player.rgba)
-        if location:
-            self._draw_location_border(location)
-        self.ui.canvas.set_clip(previous_clip)
+        snapshot = self.ui.map_state.snapshot
+        if snapshot:
+            self.grid.overlays(snapshot, target)
 
     def _source_rect(self, state, columns, rows):
         """Return the complete observed map; the game view is already the close-up."""
         width, height = columns * 8, rows * 8
         return pygame.Rect(0, 0, width, height)
-
-    def _location_rect(self, state, map_key, target, source, scale):
-        player = getattr(self.ui, "player_marker", None)
-        if player and player.map_key == map_key:
-            pixel_x, pixel_y = player.pixel_x, player.pixel_y
-        else:
-            x, y = getattr(state, "x", None), getattr(state, "y", None)
-            if x is None or y is None:
-                return None
-            pixel_x, pixel_y = x * 16, y * 16
-        side = max(2, round(16 * scale))
-        rect = pygame.Rect(target.x + round((pixel_x - source.x) * scale),
-                           target.y + round((pixel_y - source.y) * scale), side, side)
-        return rect.inflate(max(14, round(20 * scale)), max(14, round(20 * scale)))
-
-    def _draw_location_border(self, rect):
-        """Keep the current area readable above a busy sprite and terrain texture."""
-        pygame.draw.rect(self.ui.canvas, BG, rect, width=4)
-        pygame.draw.rect(self.ui.canvas, WARN, rect, width=2)
 
     @staticmethod
     def _opaque_surface(rgba, size):
@@ -101,49 +92,3 @@ class LiveMap:
         if len(pixels) == size[0] * size[1] * 4:
             pixels[3::4] = b"\xff" * (len(pixels) // 4)
         return pygame.image.frombuffer(bytes(pixels), size, "RGBA").copy()
-
-    def _sprite(self, target, source, scale, pixel_x, pixel_y, rgba, *, alpha=None):
-        if len(rgba) != 1024:
-            return
-        side = max(10, round(16 * scale))
-        sprite = pygame.image.frombuffer(rgba, (16, 16), "RGBA").copy()
-        self._clear_opaque_black_background(sprite)
-        if alpha is not None:
-            sprite.set_alpha(alpha)
-        position = (target.x + round((pixel_x - source.x) * scale),
-                    target.y + round((pixel_y - source.y) * scale))
-        self.ui.canvas.blit(pygame.transform.scale(sprite, (side, side)), position)
-
-    @staticmethod
-    def _clear_opaque_black_background(sprite):
-        """Remove large edge-connected black backdrops while keeping sprite outlines."""
-        pixels = pygame.surfarray.pixels3d(sprite)
-        alpha = pygame.surfarray.pixels_alpha(sprite)
-        dark = {(x, y) for y in range(sprite.get_height()) for x in range(sprite.get_width())
-                if alpha[x, y] and max(pixels[x, y]) <= 8}
-        if len(dark) < 16:
-            del pixels, alpha
-            return
-        edge = [(x, y) for x, y in dark
-                if x in (0, sprite.get_width() - 1) or y in (0, sprite.get_height() - 1)]
-        seen = set()
-        for start in edge:
-            if start in seen:
-                continue
-            component, stack = set(), [start]
-            while stack:
-                point = stack.pop()
-                if point in seen or point not in dark:
-                    continue
-                seen.add(point)
-                component.add(point)
-                x, y = point
-                stack.extend(((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
-            if len(component) >= 16:
-                for x, y in component:
-                    alpha[x, y] = 0
-        del pixels, alpha
-
-    @staticmethod
-    def _in_bounds(entity, columns, rows):
-        return 0 <= entity.pixel_x < columns * 8 and 0 <= entity.pixel_y < rows * 8

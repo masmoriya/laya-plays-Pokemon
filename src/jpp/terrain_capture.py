@@ -1,10 +1,25 @@
 """Capture visible Gold 97 terrain and moving sprites as separate layers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from .terrain_tiles import background_tiles
+
+
+# Gold 97 keeps Crystal's map-object layout and shifts this WRAMX block by the
+# five bytes inserted before the map/party data. The map object stores object
+# type and sprite separately, so item balls can be identified without guessing
+# from rendered pixels.
+_GOLD97_MAP_OBJECTS = 0xD723
+_MAP_OBJECT_LENGTH = 16
+_MAP_OBJECT_SPRITE = 1
+_MAP_OBJECT_Y = 2
+_MAP_OBJECT_X = 3
+_MAP_OBJECT_TYPE = 8
+_MAP_OBJECT_STRUCT_ID = 0
+_OBJECTTYPE_ITEMBALL = 1
+_SPRITE_POKE_BALL = 0x54
 
 
 @dataclass(frozen=True)
@@ -17,6 +32,9 @@ class OverworldSprite:
     pixel_y: int
     rgba: bytes
     parts: int = 4
+    # Object classification is optional: the capture layer cannot safely infer
+    # NPC versus item from pixels alone, but ROM-aware callers can provide it.
+    kind: str = "unknown"
 
 
 def _map_key(state):
@@ -94,6 +112,24 @@ def _overworld_view(emulator, state, *, aligned=True):
     return (scroll_x, scroll_y, frame, origin) if origin is not None else None
 
 
+def overworld_ready(emulator, state):
+    """Trust the rendered map, even when map tiles decode as stale text."""
+    return _overworld_view(emulator, state, aligned=False) is not None
+
+
+def visible_prompt(emulator, state):
+    """Require a visible text box before confirming a non-battle screen."""
+    lines = getattr(state, "screen_lines", ()) or ()
+    has_text = any(line.strip() for line in lines[12:])
+    has_cursor = (getattr(state, "screen_cursor", None) is not None and
+                  any(line.strip() for line in lines))
+    if not (has_text or has_cursor):
+        return False
+    frame = emulator.screen.ndarray
+    white = (frame[:, :, :3] > 224).all(axis=2)
+    return white[-40:].mean() > 0.55 and white.mean() < 0.65
+
+
 def visible_background(emulator, state, *, world_origin=None):
     """Return the real background beneath sprites, never screen pixels."""
     view = _overworld_view(emulator, state)
@@ -114,8 +150,39 @@ def _vram(memory, bank, address):
     return memory[address]
 
 
+def _wram(memory, address):
+    try:
+        return memory[1, address]
+    except TypeError:
+        return memory[address]
+
+
+def _visible_gold97_items(emulator, state):
+    """Read active item-ball objects close enough to be on the visible map."""
+    if not hasattr(state, "map_group") or state.x is None or state.y is None:
+        return ()
+    map_key = _map_key(state)
+    items = []
+    for index in range(1, 16):
+        base = _GOLD97_MAP_OBJECTS + index * _MAP_OBJECT_LENGTH
+        if (_wram(emulator.memory, base + _MAP_OBJECT_STRUCT_ID) == 0xFF or
+                _wram(emulator.memory, base + _MAP_OBJECT_SPRITE) != _SPRITE_POKE_BALL or
+                _wram(emulator.memory, base + _MAP_OBJECT_TYPE) & 0x0F != _OBJECTTYPE_ITEMBALL):
+            continue
+        x = _wram(emulator.memory, base + _MAP_OBJECT_X) - 4
+        y = _wram(emulator.memory, base + _MAP_OBJECT_Y) - 4
+        if (not 0 <= x < getattr(state, "map_width", 0) or
+                not 0 <= y < getattr(state, "map_height", 0) or
+                abs(x - state.x) > 10 or abs(y - state.y) > 9):
+            continue
+        items.append(OverworldSprite(
+            key=f"item:{map_key}:{index}", map_key=map_key,
+            pixel_x=x * 16, pixel_y=y * 16, rgba=bytes(1024), kind="item"))
+    return tuple(items)
+
+
 def visible_entities(emulator, state, *, world_origin=None):
-    """Return 16x16 NPC images from visible OAM pieces."""
+    """Return visible NPC images and explicitly decoded item objects."""
     view = _overworld_view(emulator, state, aligned=False)
     if view is None:
         return ()
@@ -146,6 +213,18 @@ def visible_entities(emulator, state, *, world_origin=None):
                 pixel_x=world_origin[0] + sx, pixel_y=world_origin[1] + sy,
                 rgba=image.tobytes(), parts=len(visible),
             ))
+    objects = getattr(state, 'overworld_objects', None)
+    if objects is not None:
+        canonical = []
+        for identity, x, y in objects:
+            nearby = min(entities, key=lambda e: abs(e.pixel_x-x*16)+abs(e.pixel_y-y*16), default=None)
+            rgba = nearby.rgba if nearby and abs(nearby.pixel_x-x*16)+abs(nearby.pixel_y-y*16) <= 24 else bytes(1024)
+            canonical.append(OverworldSprite(identity, _map_key(state), x*16, y*16, rgba, kind='npc'))
+        entities = canonical
+    items = _visible_gold97_items(emulator, state)
+    item_cells = {(e.pixel_x, e.pixel_y) for e in items}
+    entities = [e for e in entities if (e.pixel_x, e.pixel_y) not in item_cells]
+    entities.extend(items)
     return tuple(entities)
 
 

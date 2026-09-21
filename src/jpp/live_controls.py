@@ -21,6 +21,10 @@ def _adjust_speed(speed, delta):
 
 def handle_keydown(event, emulator, held_buttons, action, speed):
     key = event.key
+    mods = pygame.key.get_mods()
+    if key == pygame.K_l and mods & pygame.KMOD_CTRL:
+        action("toggle_jev")
+        return speed
     if key in UI_KEYS:
         action(UI_KEYS[key])
         return speed
@@ -29,7 +33,6 @@ def handle_keydown(event, emulator, held_buttons, action, speed):
         held_buttons.add(button)
     elif button:
         emulator.button(button, 4)
-    mods = pygame.key.get_mods()
     if key == pygame.K_s and mods & pygame.KMOD_CTRL:
         action("snapshot")
     elif key == pygame.K_r and mods & pygame.KMOD_CTRL:

@@ -6,10 +6,11 @@ import pygame
 
 from jpp.character.animation import Animation
 from jpp.live_ui import LEFT, LiveUI, SIZE
+from jpp.live_activity import collapse_repeated
+from jpp.gold97_collision import Gold97CollisionMap
 from jpp.pokemon_sprites import _surface
 from jpp.route_progress import RouteProgress
 from jpp.route_progress import MAIN
-from jpp.terrain_capture import OverworldSprite
 
 
 def _state(battle=False):
@@ -31,6 +32,8 @@ def test_dashboard_renders_six_members_battle_and_scales_without_overlapping_act
         progress = {"party": members, "badge_count": 1, "badge_total": 8,
                     "battles": 2, "wins": 1, "losses": 1, "speed": 1}
         journey = SimpleNamespace(route=RouteProgress(), tiles={})
+        terrain = Gold97CollisionMap((20, 4), 20, 20, bytes(400))
+        ui.map_state.update(_state(), terrain, ready=True, overworld=True)
         frame = np.zeros((144, 160, 4), dtype=np.uint8)
         for size in (SIZE, (1200, 800)):
             screen = pygame.display.set_mode(size)
@@ -45,9 +48,10 @@ def test_dashboard_renders_six_members_battle_and_scales_without_overlapping_act
             scaled = (round(ui._dest.x + snapshot[0] * ui._dest.width / SIZE[0]),
                       round(ui._dest.y + snapshot[1] * ui._dest.height / SIZE[1]))
             assert ui.action_at(scaled) == "snapshot"
-        assert ui.panels.map_panel._terrain.get_size() == (40 * 8, 40 * 8)
+        assert ui.panels.map_panel.grid.surface is not None
         ui.draw(frame, progress, _state(), Animation(), {"jev": [], "luna": []}, journey)
-        assert "map_toggle" not in ui.actions
+        assert "map_grid" in ui.actions
+        assert "map_artwork" in ui.actions
         assert "map_expand" not in ui.actions
     finally:
         pygame.quit()
@@ -83,6 +87,66 @@ def test_dashboard_distinguishes_laya_health_from_autonomous_mode():
         pygame.quit()
 
 
+def test_activity_uses_available_space_and_scrolls_to_older_events():
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        rendered = []
+        ui.text = lambda value, pos, font=None, color=None, **kwargs: rendered.append(str(value))
+        entries = [f"Event {index}" for index in range(40)]
+        progress = {"tactical_provider": "laya", "model_usage": {"laya": {"calls": 2,
+                    "input_tokens": 123, "output_tokens": 4}, "luna": {"calls": 1,
+                    "input_tokens": 6, "output_tokens": 7}}}
+        ui._thoughts({"laya": entries}, Animation(), progress)
+        assert "Event 39" in rendered
+        assert "Event 0" not in rendered
+        assert any("123 in / 4 out" in line for line in rendered)
+        assert any("Luna 1 calls · 6 in / 7 out" in line for line in rendered)
+        assert "Luna" not in rendered
+        ui._dest = pygame.Rect(0, 0, *SIZE)
+        ui.scroll_activity(ui.activity_bounds.center, 20)
+        rendered.clear()
+        ui._thoughts({"laya": entries}, Animation(), progress)
+        assert "Event 0" in rendered
+    finally:
+        pygame.quit()
+
+
+def test_activity_collapses_repeated_events_and_discloses_exact_model_input():
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        rendered = []
+        ui.text = lambda value, pos, font=None, color=None, **kwargs: rendered.append(str(value))
+        progress = {
+            "tactical_provider": "laya",
+            "model_usage": {"laya": {}, "luna": {}},
+            "model_input": {
+                "provider": "Laya",
+                "state": {"decision_kind": "overworld", "position": {"x": 3, "y": 5}},
+                "questions": {"next_action": {"criteria": {"up": "walk north"}}},
+            },
+        }
+
+        ui._thoughts({"laya": ["Executor chose a"] * 6}, Animation(), progress)
+        assert "Executor chose a ×6" in rendered
+        assert "model_input" in ui.actions
+
+        ui.show_model_input = True
+        rendered.clear()
+        ui._thoughts({"laya": []}, Animation(), progress)
+        assert "Laya input" in rendered
+        assert any('"decision_kind": "overworld"' in line for line in rendered)
+    finally:
+        pygame.quit()
+
+
+def test_activity_repeat_collapsing_only_groups_adjacent_events():
+    assert collapse_repeated(["a", "a", "b", "a"]) == ["a ×2", "b", "a"]
+
+
 def test_current_journey_step_wraps_in_bold_without_ellipsis():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
@@ -116,30 +180,6 @@ def test_rom_sprite_white_pixels_are_opaque():
         pygame.quit()
 
 
-def test_map_draws_current_sprites_without_stale_npc_ghosts():
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    pygame.init()
-    try:
-        ui = LiveUI(pygame.display.set_mode(SIZE))
-        panel = ui.panels.map_panel
-        map_key = "14:04"
-        ui.map_entities = (OverworldSprite("oam:8", map_key, 32, 40, bytes(1024)),)
-        ui.player_marker = OverworldSprite("player", map_key, 64, 56, bytes(16 * 16 * 4))
-        journey = SimpleNamespace(
-            tiles={}, tile_revision=0, entity_revision=1,
-            entities={map_key: {"oam:4": (16, 24, bytes(1024)), "oam:8": (32, 40, bytes(1024))}},
-        )
-        calls = []
-        panel._sprite = lambda *args, **kwargs: calls.append((args[3:6], kwargs))
-
-        panel._area(_state(), journey, pygame.Rect(0, 0, 400, 300))
-
-        assert calls == [((32, 40, bytes(1024)), {}),
-                         ((64, 56, bytes(16 * 16 * 4)), {})]
-    finally:
-        pygame.quit()
-
-
 def test_map_always_shows_full_area_without_a_second_zoom():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
@@ -147,62 +187,5 @@ def test_map_always_shows_full_area_without_a_second_zoom():
         panel = LiveUI(pygame.display.set_mode(SIZE)).panels.map_panel
         state = _state()
         assert panel._source_rect(state, 80, 60) == pygame.Rect(0, 0, 640, 480)
-    finally:
-        pygame.quit()
-
-
-def test_map_location_border_follows_captured_sprite():
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    pygame.init()
-    try:
-        ui = LiveUI(pygame.display.set_mode(SIZE))
-        panel = ui.panels.map_panel
-        state = _state()
-        ui.player_marker = OverworldSprite(
-            "player", f"{state.map_group:02X}:{state.map_number:02X}",
-            120, 68, bytes(1024))
-
-        source = panel._source_rect(state, 80, 60)
-        assert source == pygame.Rect(0, 0, 640, 480)
-        assert panel._location_rect(state, "14:04", pygame.Rect(50, 0, 300, 300),
-                                    pygame.Rect(0, 0, 320, 320), 0.9375).width > 30
-        ui.canvas.fill((0, 0, 0))
-        panel._area(state, SimpleNamespace(tiles={}, tile_revision=0), pygame.Rect(0, 0, 400, 300))
-        assert ui.canvas.get_at((153, 55))[:3] == (236, 157, 111)
-    finally:
-        pygame.quit()
-
-
-def test_transparent_sprite_pixels_show_the_terrain_underneath():
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    pygame.init()
-    try:
-        ui = LiveUI(pygame.display.set_mode(SIZE))
-        ui.canvas.fill((50, 60, 70))
-        pixels = bytearray(1024)
-        pixels[4:8] = bytes((200, 100, 50, 255))
-        ui.panels.map_panel._sprite(pygame.Rect(0, 0, 16, 16), pygame.Rect(0, 0, 16, 16),
-                                   1, 0, 0, bytes(pixels))
-        assert ui.canvas.get_at((0, 0))[:3] == (50, 60, 70)
-        assert ui.canvas.get_at((1, 0))[:3] == (200, 100, 50)
-    finally:
-        pygame.quit()
-
-
-def test_black_sprite_backdrop_is_transparent_but_colored_pixels_remain():
-    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    pygame.init()
-    try:
-        ui = LiveUI(pygame.display.set_mode(SIZE))
-        ui.canvas.fill((50, 60, 70))
-        pixels = bytearray((0, 0, 0, 255) * 256)
-        for y in range(5, 11):
-            for x in range(5, 11):
-                offset = (y * 16 + x) * 4
-                pixels[offset:offset + 4] = bytes((220, 130, 40, 255))
-        ui.panels.map_panel._sprite(pygame.Rect(0, 0, 16, 16), pygame.Rect(0, 0, 16, 16),
-                                    1, 0, 0, bytes(pixels))
-        assert ui.canvas.get_at((0, 0))[:3] == (50, 60, 70)
-        assert ui.canvas.get_at((7, 7))[:3] == (220, 130, 40)
     finally:
         pygame.quit()

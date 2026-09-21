@@ -13,17 +13,18 @@ from .audio import AudioSink, pre_init as pre_init_audio
 from .game_adapter import adapter_for_rom
 from .gold97_adapter import Gold97Adapter
 from .gold97_names import apply_requested_names
-from .gold97_collision import Gold97CollisionMap
+from .gold97_collision import Gold97CollisionCache
 from .frame_pacer import FramePacer
 from .agent.gold97_controller import Gold97Controller
-from .agent.gold97_input import press_action, release_restored_buttons
+from .agent.gold97_input import renew_movement, press_action, release_restored_buttons
 from .live_ui import SIZE, LiveUI
 from .battle_progress import BattleProgress
 from .journey import Journey
 from .pokemon_sprites import PokemonSprites
 from .journey_timeline import MILESTONES, VISIBLE, timeline_start
 from .progress import ProgressTracker
-from .terrain_capture import WorldCamera, visible_background, visible_entities, visible_player
+from .terrain_capture import (WorldCamera, overworld_ready, visible_background,
+                              visible_entities, visible_player, visible_prompt)
 from .live_controls import handle_keydown
 from .live_cli import add_parser
 from .rules import GameRules
@@ -83,6 +84,7 @@ def run(
     if state_path:
         _load_state(emu, state_path)
     audio = AudioSink(getattr(emu.sound, "sample_rate", 48_000))
+    audio.set_muted(True)
     audio.set_speed(speed)
     store = RunStore(run_id=run_id)
     journey = Journey(run_id)
@@ -127,15 +129,17 @@ def run(
     pacer = FramePacer()
     last_save = time.monotonic()
     held_buttons = set()
+    autonomous_action = None
     pokemon_sprites = PokemonSprites(rom) if isinstance(adapter, Gold97Adapter) else None
     ui = LiveUI(screen, pokemon_sprites)
+    ui.audio_muted = audio.muted
     camera = WorldCamera()
-    collision_cache = None
+    collision_cache = Gold97CollisionCache()
     provider_name = (provider_name or os.environ.get("AGENT_PROVIDER") or "laya").lower()
     if provider_name not in {"fake", "jev", "laya"}:
         raise ValueError(f"unsupported live tactical provider: {provider_name}")
     tactical_label = provider_name.title()
-    laya_vision = os.environ.get("LAYA_VISION", "0").strip().lower() in {
+    laya_vision = os.environ.get("LAYA_VISION", "1").strip().lower() in {
         "1", "true", "yes", "on"
     }
     vision_enabled = provider_name != "laya" or laya_vision
@@ -147,9 +151,8 @@ def run(
         if not message:
             return
         entries = thoughts.setdefault(source, [])
-        if not entries or entries[-1] != message:
-            entries.append(message)
-            del entries[:-8]
+        entries.append(message)
+        del entries[:-500]
 
     skip_exit_checkpoint = False
     def save_agent(reason):
@@ -159,7 +162,7 @@ def run(
         return path
 
     def restore_latest():
-        nonlocal last_save, battles, collision_cache
+        nonlocal last_save, battles, collision_cache, autonomous_action
         restored = checkpoints.latest(run_id)
         if restored is None:
             add_thought("jev", "No snapshot to restore yet.")
@@ -169,10 +172,12 @@ def run(
         except OSError:
             add_thought("jev", "That snapshot is no longer available.")
             return
+        autonomous_action = None
         if isinstance(adapter, Gold97Adapter):
             adapter.reset_transition()
             camera.reset()
-            collision_cache = None
+            collision_cache.reset()
+            ui.map_state.reset()
         ui.timeline.player = None
         if not journey.restore_checkpoint(restored):
             journey.reset_view()
@@ -195,6 +200,7 @@ def run(
     def action(name):
         nonlocal emu, audio, last_save, skip_exit_checkpoint, battles
         nonlocal autonomous, controller, collision_cache
+        nonlocal autonomous_action
         if name == "snapshot":
             save_agent("snapshot")
             last_save = time.monotonic()
@@ -202,7 +208,11 @@ def run(
         elif name == "restore":
             restore_latest()
         elif name == "restart":
-            collision_cache = None
+            if autonomous_action is not None:
+                emu.button_release(autonomous_action)
+                autonomous_action = None
+            collision_cache.reset()
+            ui.map_state.reset()
             # Preserve the return point before reboot. Never remove the cartridge RAM.
             save_agent("before-restart")
             audio.close()
@@ -236,15 +246,40 @@ def run(
                 if state_path:
                     if not controller.memory.restore(state_path):
                         controller.memory.reset()
-            autonomous = not autonomous
+            autonomous = not controller.playback.requested
             if autonomous:
                 controller.resume()
             else:
+                controller.manual_pause()
+                if autonomous_action is not None:
+                    emu.button_release(autonomous_action)
+                    autonomous_action = None
                 add_thought("jev", "Paused.")
+        elif name == "toggle_luna" and controller:
+            controller.strategy.toggle()
+            if controller.strategy.enabled and controller.vision is None:
+                from .agent.gold97_vision import LunaScreenReader
+                controller.vision = LunaScreenReader()
+            if autonomous_action is not None:
+                emu.button_release(autonomous_action)
+                autonomous_action = None
+            if controller.paused and controller.pause_reason.startswith("Luna"):
+                controller.resume()
+                autonomous = True
+        elif name == "retry_agent" and controller:
+            controller.resume()
+            autonomous = True
+        elif name == "strategy_details":
+            ui.strategy_details = not ui.strategy_details
+        elif name == "model_input":
+            ui.show_model_input = not ui.show_model_input
+            ui.activity_scroll = 0
         elif name == "shortcuts":
             ui.show_shortcuts = not ui.show_shortcuts
         elif name == "toggle_audio":
             ui.audio_muted = audio.toggle_mute()
+        elif name in ("map_grid", "map_artwork"):
+            ui.map_mode = "grid" if name == "map_grid" else "artwork"
         elif name == "map_details":
             ui.map_details = not ui.map_details
         elif name == "confirm_stage":
@@ -265,6 +300,8 @@ def run(
         _load_state(emu, path)
         adapter.reset_transition()
         camera.reset()
+        collision_cache.reset()
+        ui.map_state.reset()
         pacer.reset()
         audio.flush()
         journey.restore_checkpoint(path)
@@ -278,7 +315,7 @@ def run(
         add_thought("jev", "Bedroom input stalled; restored a prior snapshot.")
         return earlier
 
-    if autonomous and isinstance(adapter, Gold97Adapter):
+    if isinstance(adapter, Gold97Adapter):
         from .agent.factory import provider_from_env
         from .agent.policy_adapter import ProviderPolicy
         controller = Gold97Controller(
@@ -289,6 +326,9 @@ def run(
             vision_enabled=vision_enabled)
         if state_path and not controller.memory.restore(state_path):
             controller.memory.reset()
+        autonomous = controller.playback.requested
+        if autonomous:
+            controller.resume()
 
     try:
         while True:
@@ -309,8 +349,14 @@ def run(
                     selected = ui.action_at(event.pos)
                     if selected:
                         action(selected)
+                if event.type == pygame.MOUSEWHEEL:
+                    ui.scroll_activity(pygame.mouse.get_pos(), event.y)
             if held_buttons and autonomous:
                 autonomous = False
+                controller.manual_pause()
+                if autonomous_action is not None:
+                    emu.button_release(autonomous_action)
+                    autonomous_action = None
                 add_thought("jev", "Paused for manual control.")
             _press_held_buttons(emu, held_buttons)
             emu.tick()
@@ -321,10 +367,8 @@ def run(
                     add_thought("jev", "Named " + " and ".join(names) + ".")
             snapshot = adapter.snapshot(emu)
             state = snapshot.state
-            if (isinstance(adapter, Gold97Adapter) and
-                    (collision_cache is None or collision_cache.map_key !=
-                     (state.map_group, state.map_number))):
-                collision_cache = Gold97CollisionMap.from_emulator(emu, state)
+            terrain = (collision_cache.update(emu, state)
+                       if isinstance(adapter, Gold97Adapter) else None)
             world_origin = camera.position(emu, state) if isinstance(adapter, Gold97Adapter) else None
             update = snapshot.badge_update
             journey.observe_route(state)
@@ -341,9 +385,9 @@ def run(
             progress["speed"] = speed
             progress["tactical_provider"] = provider_name
             progress["tactical_label"] = tactical_label
-            # This reports whether the optional transcriber is configured, not
+            # This reports whether the optional map reader is configured, not
             # whether a single asynchronous frame is in flight.
-            progress["luna_connected"] = bool(controller and controller.vision is not None)
+            progress["luna_connected"] = bool(controller and controller.strategy.enabled and controller.vision is not None)
             progress["tactical_auto"] = autonomous
             progress["tactical_available"] = isinstance(adapter, Gold97Adapter)
             if not snapshot.supports_ram_progress:
@@ -359,7 +403,8 @@ def run(
                 save_agent("interval")
                 last_save = time.monotonic()
             map_key = f"{state.map_group:02X}:{state.map_number:02X}"
-            if (world_origin is not None and camera.map_frames >= 3
+            if (world_origin is not None and collision_cache.ready
+                    and camera.map_frames >= 3
                     and (map_key, state.x, state.y) != journey._last_sample):
                 observed = visible_background(emu, state, world_origin=world_origin)
                 journey.observe_tiles(state, observed)
@@ -368,32 +413,73 @@ def run(
                 if skip_exit_checkpoint and observed:
                     skip_exit_checkpoint = False
             frame = emu.screen.ndarray
-            if world_origin is not None:
+            if world_origin is not None and collision_cache.ready:
                 detections = visible_entities(emu, state, world_origin=world_origin)
                 ui.map_entities = journey.track_entities(state, detections)
             else:
                 ui.map_entities = ()
             if isinstance(adapter, Gold97Adapter):
+                visible_overworld = (world_origin is not None or
+                                     overworld_ready(emu, state))
+                control_overworld = visible_overworld and collision_cache.ready
+                if controller:
+                    controller.route = journey.route
+                if controller and not autonomous:
+                    controller.observe(state, ui.map_entities, control_overworld, terrain)
                 if autonomous and controller:
                     choice = controller.step(
                         state, frame=frame, entities=ui.map_entities,
-                        overworld=world_origin is not None,
-                        terrain=collision_cache)
+                        overworld=control_overworld,
+                        prompt_visible=(visible_prompt(emu, state)
+                                        if collision_cache.ready and
+                                        not visible_overworld and not state.in_battle
+                                        else False),
+                        terrain=terrain)
                     if choice:
-                        # Send one bounded cartridge press per decision.
-                        press_action(emu, choice, menu=(state.in_battle or
-                                     world_origin is None or controller.healing is not None))
-                    event = controller.pop_provider_event()
-                    if event:
+                        if autonomous_action is not None and autonomous_action != choice:
+                            emu.button_release(autonomous_action)
+                        if autonomous_action != choice:
+                            autonomous_action = choice
+                            press_action(emu, choice, menu=(state.in_battle or
+                                         not control_overworld or controller.healing is not None))
+                            pressed = True
+                        else:
+                            pressed = False
+                    else:
+                        pressed = False
+                    # Release as soon as the controller observes the tile change.
+                    # Continuing through cooldown would drift past its origin.
+                    autonomous_action = renew_movement(
+                        emu, autonomous_action, controller.held_action,
+                        overworld=control_overworld, in_battle=state.in_battle,
+                        pressed=pressed)
+                    while event := controller.pop_provider_event():
                         add_thought(provider_name, event)
                     if controller.paused:
-                        autonomous = False
-                        add_thought(provider_name, controller.pause_reason)
+                        if autonomous_action is not None:
+                            emu.button_release(autonomous_action)
+                            autonomous_action = None
+                        if controller.pause_reason != getattr(controller, "displayed_pause", None):
+                            add_thought(provider_name, controller.pause_reason)
+                            controller.displayed_pause = controller.pause_reason
+            if controller:
+                controller._poll_provider_health()
+                controller.strategy.poll_retired()
+                progress["strategy"] = controller.strategy.summary()
+                progress["play_requested"] = controller.playback.requested
+                progress["playback_status"] = controller.playback.summary()["status"]
+                progress["agent_paused"] = controller.paused
+                progress["action_source"] = controller.action_source
+                progress["model_input"] = controller.latest_model_input
+                progress["tactical_auto"] = autonomous and not controller.paused
+                ui.strategy_summary = progress["strategy"]
             health = controller.provider_health if controller else "offline"
             if health == "unavailable":
                 tactical_status = "unavailable"
             elif autonomous and controller and not controller.paused:
                 tactical_status = "checking" if health == "checking" else "live"
+            elif health == "ready":
+                tactical_status = "ready"
             else:
                 tactical_status = "not_connected"
             progress["tactical_health"] = health
@@ -408,7 +494,7 @@ def run(
             progress["model_usage"] = (controller.usage_snapshot()
                                         if controller else {"jev": {}, "luna": {}})
             player = (visible_player(emu, state, world_origin=world_origin)
-                      if world_origin is not None else None)
+                      if world_origin is not None and collision_cache.ready else None)
             if player:
                 ui.player_marker = player
             elif (ui.player_marker and getattr(state, "x", None) is not None
@@ -417,6 +503,15 @@ def run(
                 pass  # retain the last captured graphic through menus and partial frames
             else:
                 ui.player_marker = None
+            ui.navigation_target = (controller.navigation_target
+                                    if autonomous and controller else None)
+            if controller:
+                ui.map_state = controller.map_state
+            else:
+                ui.map_state.update(
+                    state, terrain, ready=collision_cache.ready,
+                    overworld=world_origin is not None, entities=ui.map_entities,
+                    destination=ui.navigation_target)
             ui.draw(frame, progress, state, animation, thoughts, journey, battles)
             pacer.wait(speed)
     finally:

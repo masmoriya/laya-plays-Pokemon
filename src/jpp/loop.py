@@ -15,7 +15,10 @@ from .options import Branch
 from .policy import Decision, Policy
 
 FRAMES_PER_TICK = 8  # one decode per 8 frames, ~7.5 decodes a second at 60 fps
-PRESS_FRAMES = 4
+# Keep directional input down for the whole decode window; menu controls stay
+# short taps so A cannot advance text repeatedly.
+PRESS_FRAMES = FRAMES_PER_TICK
+MENU_PRESS_FRAMES = 4
 TURN_SETTLE_TICKS = 120  # cap on waiting for a battle turn to play out
 NO_PROGRESS_CAP = 40  # decisions per goal with no progress, CONTEXT section 3
 BLOCKED_AFTER = 2  # presses of one direction from one tile before calling it a wall
@@ -108,7 +111,8 @@ class Driver:
 
     def press(self, button: str):
         before = self._where()
-        self.emu.button(button, PRESS_FRAMES)
+        delay = MENU_PRESS_FRAMES if button in {"a", "b", "start", "select"} else PRESS_FRAMES
+        self.emu.button(button, delay)
         state = self.tick()
         if button in route.DIRECTIONS:
             # a step takes more than one tick of frames to land. Judging it after one

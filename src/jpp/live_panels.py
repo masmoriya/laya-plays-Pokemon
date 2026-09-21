@@ -72,6 +72,8 @@ class LivePanels:
                 for index, line in enumerate(lines):
                     self.ui.text(line, (box.x + 65, row_y + index * font.get_linesize()), font, color)
                 row_y += max(42, len(lines) * font.get_linesize() + 8)
+        from .live_strategy import draw_strategy
+        draw_strategy(self.ui, box, row_y + 4)
         optional = stages.get("optional")
         self.ui.selected_optional = optional[0] if optional else None
         if optional:
