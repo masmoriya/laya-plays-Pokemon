@@ -37,29 +37,29 @@ def cursor_cell(tiles):
 def _party_cursor(lines, tiles):
     """Return the one-based party slot under the visible party cursor.
 
-    Gold 97 lays out the party as three rows per column.  The first three
-    slots are in the left column and later slots (when present) are in the
-    right column.  The cursor is drawn one tile to the left of the name.
+    Gold 97 lays out up to six party slots in one vertical list.  CANCEL is
+    drawn immediately after the final occupied slot, so its row is dynamic.
+    The cursor is drawn in column zero, one tile to the left of the label.
     """
-    if not any("CANCEL" in line.upper() for line in lines[:10]):
+    cancel_rows = [row for row, line in enumerate(lines)
+                   if "CANCEL" in line.upper()]
+    if not cancel_rows:
         return None
-    for row in (1, 3, 5):
-        for col in (0, 10):
-            if tiles[row][col] in CURSORS:
-                return (row - 1) // 2 + 1 + (3 if col else 0)
-    # CANCEL occupies the fourth row in the one-column layout.  It is not a
-    # legal target for a forced switch, but reporting it lets the controller
-    # move away from it rather than accidentally confirming it.
-    if tiles[7][0] in CURSORS:
+    if any(tiles[row][0] in CURSORS for row in cancel_rows):
         return 0
+    for slot, row in enumerate((1, 3, 5, 7, 9, 11), start=1):
+        if row < len(tiles) and tiles[row][0] in CURSORS:
+            return slot
     return None
 
 
 def _looks_like_party(lines):
     """Recognize party rows even while a battle message overlays the bottom."""
-    if not any("CANCEL" in line.upper() for line in lines[:10]):
+    if not any("CANCEL" in line.upper() for line in lines):
         return False
-    for row in (1, 3, 5):
+    for row in (1, 3, 5, 7, 9, 11):
+        if row + 1 >= len(lines):
+            continue
         name = lines[row].strip()
         details = lines[row + 1].upper()
         if name and ("FNT" in details or any(char.isdigit() for char in details)):

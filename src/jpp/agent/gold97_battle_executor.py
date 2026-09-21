@@ -20,6 +20,9 @@ class BattleExecutor:
         self.phase = None
         self.before = None
         self.unresolved_turns = 0
+        self.decline_optional_switch = False
+        self.rejected_switch_target = None
+        self.rejected_switch_active = None
 
     @staticmethod
     def signature(state):
@@ -88,11 +91,18 @@ class BattleExecutor:
             self.action = None
             self.phase = None
             self.recovered = False
+            self.rejected_switch_target = None
+            self.rejected_switch_active = None
             owner.battle_switch_phase = None
-        if 'ALREADY OUT' in text or any(word in text for word in ('NO WILL', "CAN'T", 'CANNOT')):
+        already_out = 'ALREADY OUT' in text
+        if already_out or any(word in text for word in ('NO WILL', "CAN'T", 'CANNOT')):
             if self.error != text:
                 self.error = text
-                self.cancel_party = 'ALREADY OUT' in text or bool(active and active.hp > 0)
+                if already_out and self.action and self.action.kind == 'switch':
+                    self.rejected_switch_target = self.action.target
+                    self.rejected_switch_active = getattr(state, 'active_slot', None)
+                    self.decline_optional_switch = self.phase == 'optional_switch'
+                self.cancel_party = already_out or bool(active and active.hp > 0)
                 self.action = None
                 self.confirmed = None
                 return 'a'
@@ -118,8 +128,12 @@ class BattleExecutor:
         if menu in {'switch_prompt', 'forced_prompt'}:
             if self.confirmed == frame:
                 return None
-            self.action = owner.battle_strategy.plan(state, optional=menu == 'switch_prompt',
-                                                     forced=menu == 'forced_prompt')
+            self.phase = 'optional_switch' if menu == 'switch_prompt' else 'forced_switch'
+            if menu == 'switch_prompt' and self.decline_optional_switch:
+                self.action = BattleAction('stay', reason='Stay in: rejected switch target')
+            else:
+                self.action = owner.battle_strategy.plan(state, optional=menu == 'switch_prompt',
+                                                         forced=menu == 'forced_prompt')
             owner._set_provider_event(self.action.reason)
             answer = 'YES' if self.action.kind == 'switch' else 'NO'
             row = next((i for i, line in enumerate(lines) if line.strip().upper() == answer), None)
@@ -152,6 +166,25 @@ class BattleExecutor:
             if self.action.target is None:
                 owner.pause(self.action.reason)
                 return None
+            current = getattr(state, 'active_slot', None)
+            rejected = (self.action.target == self.rejected_switch_target
+                        and current == self.rejected_switch_active)
+            if self.action.kind == 'switch' and (self.action.target == current or rejected):
+                if self.phase == 'optional_switch':
+                    self.decline_optional_switch = True
+                    self.action = None
+                    self.confirmed = None
+                    owner.battle_switch_phase = None
+                    owner._set_provider_event('Stay in: switch target is already active')
+                    return 'b'
+                if active.hp > 0:
+                    self.action = None
+                    self.confirmed = None
+                    owner.battle_switch_phase = None
+                    owner._set_provider_event('Cancelled switch to the active Pokemon')
+                    return 'b'
+                owner.pause('Forced replacement target matches the active Pokemon')
+                return None
             button = party_step(cursor, self.action.target)
             if button == 'a':
                 self.confirmed, self.before = frame, signature
@@ -168,6 +201,7 @@ class BattleExecutor:
             self.confirmed = frame
             return 'a'
         if menu == 'command':
+            self.decline_optional_switch = False
             if self.confirmed == frame:
                 return None
             if self.phase == 'resolve' and self.before == signature:
@@ -233,4 +267,3 @@ class BattleExecutor:
                 self.phase = 'resolve'
                 return 'a'
         return None
-

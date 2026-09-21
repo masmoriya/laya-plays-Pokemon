@@ -125,6 +125,25 @@ def test_adapter_reads_party_badges_and_pokedex(tmp_path):
     assert (progress["pokedex_caught"], progress["pokedex_seen"], progress["pokedex_total"]) == (1, 1, 253)
 
 
+def test_egg_struct_species_does_not_discard_the_party(tmp_path):
+    from jpp.gold97_adapter import EGG_ID
+
+    adapter = Gold97Adapter(_rom(tmp_path))
+    memory = bytearray(0x10000)
+    memory[PARTY_COUNT] = 2
+    memory[PARTY_SPECIES:PARTY_SPECIES + 2] = bytes((155, EGG_ID))
+    for slot, species in enumerate((155, 236)):
+        base = PARTY_MONS + slot * 0x30
+        memory[base] = species
+        memory[base + 31] = 5
+        memory[base + 34:base + 38] = b"\0\x14\0\x14"
+    state = adapter.snapshot(type("Emulator", (), {"memory": memory})()).state
+    assert len(state.party) == 2
+    assert state.party[0].species == "FLAMBEAR"
+    assert state.party[1].species == "EGG"
+    assert state.party[1].hp == 0
+
+
 def test_adapter_does_not_promote_uninitialized_party_or_map_ram(tmp_path):
     adapter = Gold97Adapter(_rom(tmp_path))
     memory = bytearray(0x10000)

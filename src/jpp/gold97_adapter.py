@@ -1,6 +1,6 @@
 """Memory adapter for the Gold/Silver '97 Reforged Crystal build."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from .decode import Battle, Mon
@@ -17,6 +17,7 @@ PARTY_COUNT = 0xDCDC
 PARTY_SPECIES = 0xDCDD
 PARTY_MONS = 0xDCE4
 PARTY_STRUCT_LEN = 0x30
+EGG_ID = 0xFE
 POKEDEX_CAUGHT = 0xDE9E
 POKEDEX_SEEN = 0xDEBE
 BADGES = 0xD857
@@ -164,8 +165,16 @@ class Gold97Adapter:
         self._pending_starter = None
 
     def _mon(self, mem, base, slot, battle=False, species_id=None):
-        return decode_mon(self.data, mem, base, slot, battle, species_id,
-                          self.mechanics_verified)
+        mon = decode_mon(self.data, mem, base, slot, battle, species_id,
+                         self.mechanics_verified)
+        if not battle and species_id == EGG_ID:
+            # The party species list uses the EGG sentinel while the struct
+            # intentionally retains the species that will hatch.  Keep the
+            # slot so cartridge indices remain aligned, but never expose the
+            # egg as a usable battler.
+            return replace(mon, species="EGG", hp=0, status="none", types=(),
+                           moves=(), pp=(), max_pp=(), stats=(), species_data=None)
+        return mon
 
     def snapshot(self, emulator):
         mem = Gold97Memory(emulator.memory)
@@ -177,13 +186,16 @@ class Gold97Adapter:
         species_ids = []
         for slot in range(min(count, 6)):
             species_id = mem[PARTY_SPECIES + slot]
-            if not (0 < species_id < len(self.data.names)):
+            if species_id != EGG_ID and not (0 < species_id < len(self.data.names)):
                 break
             species_ids.append(species_id)
         for slot, species_id in enumerate(species_ids):
             base = PARTY_MONS + slot * PARTY_STRUCT_LEN
             mon = self._mon(mem, base, slot + 1, species_id=species_id)
             struct_species = mem[base]
+            species_matches = (struct_species == species_id or
+                               species_id == EGG_ID and
+                               0 < struct_species < len(self.data.names))
             warming_first_starter = not self._last_party and count == 1 and slot == 0
             if warming_first_starter and struct_species == 0:
                 candidate = (species_id, mon.level, mon.hp, mon.max_hp)
@@ -192,7 +204,7 @@ class Gold97Adapter:
                     break
             else:
                 self._pending_starter = None
-            if (struct_species != species_id and not (warming_first_starter and struct_species == 0)
+            if (not species_matches and not (warming_first_starter and struct_species == 0)
                     or not 1 <= mon.level <= 100
                     or not 0 < mon.max_hp <= 999 or not 0 <= mon.hp <= mon.max_hp):
                 break

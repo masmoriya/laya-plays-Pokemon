@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 from jpp.decode import Mon, Battle
 from jpp.agent.gold97_battle import Gold97BattleStrategy
 from jpp.agent.gold97_battle_executor import BattleExecutor
+from jpp.agent.gold97_battle_menus import party_step
 from jpp.agent.gold97_damage import estimate
 from jpp.agent.gold97_mechanics import compatible, multiplier, REFERENCE
 from jpp.agent.gold97_screen import battle_menu
@@ -131,6 +132,62 @@ def test_already_out_recovers_then_cancels_party():
     assert ex.step(own, st) == 'b'
 
 
+def test_optional_switch_never_confirms_the_active_slot():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('switch', 0, 'Switch')
+    ex.phase = 'optional_switch'
+    st = state(battle_menu_kind='party', battle_menu_cursor=(1, 1))
+    assert ex.step(own, st) == 'b'
+    assert ex.decline_optional_switch
+    st.battle_menu_kind = 'switch_prompt'
+    st.screen_lines = ('Will you change', 'YES', 'NO')
+    st.screen_cursor = (1, 1)
+    assert ex.step(own, st) == 'down'
+    st.screen_cursor = (1, 2)
+    assert ex.step(own, st) == 'a'
+    assert ex.action.kind == 'stay'
+
+
+def test_already_out_rejection_declines_the_same_optional_offer():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('switch', 0, 'Switch')
+    ex.phase = 'optional_switch'
+    st = state(battle_menu_kind='party', screen_lines=('VOLBEAR is already out.',))
+    assert ex.step(own, st) == 'a'
+    st.screen_lines = ('Choose a Pokemon',)
+    assert ex.step(own, st) == 'b'
+    st.battle_menu_kind = 'switch_prompt'
+    st.screen_lines = ('Will you change', 'YES', 'NO')
+    st.screen_cursor = (1, 1)
+    assert ex.step(own, st) == 'down'
+    assert ex.action.kind == 'stay'
+
+
+def test_rejected_switch_target_stays_blocked_until_active_slot_changes():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('switch', 0, 'Switch')
+    ex.phase = 'switch'
+    st = state(battle_menu_kind='party', screen_lines=('VOLBEAR is already out.',),
+               active_slot=1)
+    assert ex.step(own, st) == 'a'
+    st.screen_lines = ('Choose a Pokemon',)
+    assert ex.step(own, st) == 'b'
+    ex.action = BattleAction('switch', 0, 'Switch')
+    assert ex.step(own, st) == 'b'
+    st.active_slot = 2
+    ex.action = BattleAction('switch', 0, 'Switch')
+    assert ex.step(own, st) == 'a'
+
+
+def test_party_navigation_is_one_vertical_list():
+    assert party_step((1, 1), 3) == 'down'
+    assert party_step((1, 4), 3) == 'a'
+    assert party_step((1, 5), 1) == 'up'
+
+
 def test_original_move_slot_and_stale_confirmation():
     ex, own = BattleExecutor(), owner()
     st = state(mon(moves=('EMBER',), pp=(25,), move_slots=(2,)),
@@ -169,6 +226,18 @@ def test_party_switch_submenu_is_not_confused_with_party_selection():
     tiles = [[0] * 20 for _ in range(18)]
     tiles[1][0] = tiles[10][12] = 0xED
     assert battle_menu(lines, tiles) == ('party_action', (12, 10))
+
+
+def test_screen_reads_lower_vertical_party_slots_and_dynamic_cancel():
+    lines = [''] * 18
+    for row, name in zip((1, 3, 5, 7, 9), ('ONE', 'TWO', 'THREE', 'FOUR', 'FIVE')):
+        lines[row], lines[row + 1] = name, '20 20'
+    lines[11] = 'CANCEL'
+    tiles = [[0] * 20 for _ in range(18)]
+    tiles[7][0] = 0xED
+    assert battle_menu(lines, tiles) == ('party', (1, 4))
+    tiles[7][0], tiles[11][0] = 0, 0xED
+    assert battle_menu(lines, tiles) == ('party', (1, 0))
 
 
 def test_screen_recognizes_optional_offer_before_generic_text():

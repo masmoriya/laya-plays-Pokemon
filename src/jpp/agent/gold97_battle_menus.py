@@ -7,10 +7,6 @@ def party_step(cursor, target):
     target += 1
     if current == 0:
         return 'up'
-    if current <= 3 < target:
-        return 'right'
-    if target <= 3 < current:
-        return 'left'
     if current != target:
         return 'down' if current < target else 'up'
     return 'a'
