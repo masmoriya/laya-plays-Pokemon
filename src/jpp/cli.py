@@ -253,6 +253,10 @@ def main(argv=None):
     from .live import add_parser as add_live_parser
 
     add_live_parser(sub)
+    from .notebook_cli import add_parser as add_notes_parser
+    add_notes_parser(sub)
+    from .benchmark import add_parser as add_benchmark_parser
+    add_benchmark_parser(sub)
 
     p = sub.add_parser("state", help="print the Jev request for a RAM image")
     p.add_argument("--ram", required=True, type=_file)

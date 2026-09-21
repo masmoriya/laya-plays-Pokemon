@@ -6,6 +6,7 @@
 /data/*.sqlite
 /data/**/*.state
 /data/**/*.jsonl
+/data/notes/
 /data/pokemon_sprites/
 /assets/jev/**/*.png
 /runs/

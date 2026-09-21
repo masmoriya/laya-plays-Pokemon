@@ -9,6 +9,7 @@ from .live_panels import LivePanels
 from .live_activity import collapse_repeated, format_model_input
 from .live_map_state import LiveMapState
 from .live_strategy import controls as strategy_controls
+from .live_notebook import NotebookPanel
 from .live_ui_colors import ACCENT, BG, GOOD, MUTED, PANEL, SURFACE, TEXT
 
 
@@ -68,6 +69,7 @@ class LiveUI:
         self.map_details = False
         self.strategy_details = False
         self.strategy_summary = None
+        self.notebook = NotebookPanel()
         self.map_mode = "grid"
         self.map_state = LiveMapState()
         self.map_entities = ()
@@ -96,6 +98,7 @@ class LiveUI:
         self._footer(progress, thoughts)
         if self.show_shortcuts:
             self._shortcuts()
+        self.notebook.draw(self)
         width, height = self.screen.get_size()
         scale = min(width / SIZE[0], height / SIZE[1])
         dest = pygame.Rect(0, 0, round(SIZE[0] * scale), round(SIZE[1] * scale))
@@ -132,9 +135,21 @@ class LiveUI:
     def text(self, value, pos, font=None, color=TEXT, *, center=False, max_width=None):
         font = font or self.body
         value = str(value)
-        if max_width is not None:
-            while value and font.size(value)[0] > max_width:
-                value = value[:-1].rstrip("…") + "…"
+        if max_width is not None and font.size(value)[0] > max_width:
+            suffix = "…"
+            if font.size(suffix)[0] > max_width:
+                value = ""
+            else:
+                # Shorten the source, not the ellipsis appended for display.
+                # Binary search also bounds work for long provider messages.
+                low, high = 0, len(value)
+                while low < high:
+                    middle = (low + high + 1) // 2
+                    if font.size(value[:middle] + suffix)[0] <= max_width:
+                        low = middle
+                    else:
+                        high = middle - 1
+                value = value[:low] + suffix
         image = font.render(value, True, color)
         rect = image.get_rect(center=pos) if center else image.get_rect(topleft=pos)
         self.canvas.blit(image, rect)

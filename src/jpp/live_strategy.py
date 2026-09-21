@@ -41,6 +41,7 @@ def controls(ui, progress):
     if not progress.get("strategy"):
         return
     enabled = progress["strategy"]["enabled"]
+    ui.button('notebook', 'Notes', pygame.Rect(1232, 1026, 66, 30))
     ui.button("toggle_luna", f"Luna strategy {'On' if enabled else 'Off'}",
               pygame.Rect(1012, 1026, 144, 30))
     if progress.get("agent_paused"):

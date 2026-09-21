@@ -267,10 +267,24 @@ def run(
                 controller.resume()
                 autonomous = True
         elif name == "retry_agent" and controller:
+            controller.memory.experience.retry(controller.route.now)
             controller.resume()
             autonomous = True
         elif name == "strategy_details":
             ui.strategy_details = not ui.strategy_details
+        elif (name == 'notebook' or name.startswith('notes_')) and controller:
+            if name == 'notebook' and not ui.notebook.open:
+                controller.manual_pause()
+                autonomous = False
+                for button in held_buttons:
+                    emu.button_release(button)
+                held_buttons.clear()
+                if autonomous_action is not None:
+                    emu.button_release(autonomous_action)
+                    autonomous_action = None
+            exported = ui.notebook.action(name, controller)
+            if exported:
+                add_thought('jev', f'Notes exported: {exported.name}')
         elif name == "model_input":
             ui.show_model_input = not ui.show_model_input
             ui.activity_scroll = 0
@@ -335,6 +349,8 @@ def run(
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
+                if ui.notebook.handle(event):
+                    continue
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return

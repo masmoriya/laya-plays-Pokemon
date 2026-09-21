@@ -40,6 +40,8 @@ class Gold97Memory:
             "maps": {}, "facts": [], "navigation_version": NAVIGATION_VERSION,
         })
         self.save()
+        from .experience import Experience
+        self.experience = Experience(self)
 
     def map(self, key):
         return self.world["maps"].setdefault(key, {"visited": [], "edges": [], "blocked": []})
@@ -86,6 +88,7 @@ class Gold97Memory:
             facts.append(fact)
             self.world["facts"] = facts[-80:]
             self.save()
+            self.experience.record('fact', fact=fact)
 
     def relevant(self, map_key):
         local = [fact for fact in self.world["facts"] if fact["map"] == map_key]
@@ -107,15 +110,18 @@ class Gold97Memory:
                               (self.run_id, str(path))).fetchone()
         if row is None:
             return False
+        self.experience.interrupt('Checkpoint restored; prior action outcome is unknown')
         enabled = self.world.get("journey_strategy", {}).get("enabled")
         self.world = _migrate_world(json.loads(row[0]))
         if enabled is not None:
             from .journey_knowledge import knowledge
             knowledge(self)["enabled"] = enabled
         self.save()
+        self.experience.record('restore', checkpoint=str(path))
         return True
 
     def reset(self):
+        self.experience.interrupt('World reset; prior action outcome is unknown')
         enabled = self.world.get("journey_strategy", {}).get("enabled")
         self.world = {"maps": {}, "facts": [], "navigation_version": NAVIGATION_VERSION}
         if enabled is not None:

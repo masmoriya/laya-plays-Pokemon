@@ -19,7 +19,8 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
                 on_decision=None, on_frame=None, on_audio=None, *,
                 run_id="headless-gold97", database="data/jev.sqlite",
                 checkpoint_dir="data/checkpoints", vision=None, memory_state=None,
-                memory_state_out=None):
+                memory_state_out=None, max_frames=None, max_seconds=None,
+                strategy_enabled=None, on_summary=None):
     checkpoints = CheckpointManager(directory=checkpoint_dir)
     release_restored_buttons(emulator)
     collision_cache = Gold97CollisionCache()
@@ -57,13 +58,24 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
     if memory_state and not controller.memory.restore(memory_state):
         controller.memory.reset()
     controller.route = RouteProgress.from_dict(controller.memory.world.get("route"))
+    if strategy_enabled is not None:
+        controller.strategy.data['enabled'] = strategy_enabled
+        controller.memory.save()
+        if not strategy_enabled:
+            controller.vision = None
     controller.resume()
+    initial_verified = set(controller.route.completed) - set(controller.route.manual_history)
+    initial_events = dict(controller.memory.db.execute(
+        'SELECT kind,count(*) FROM agent_journal WHERE run_id=? GROUP BY kind', (run_id,)))
     records = []
     log = Path(log_path).open("a") if log_path else None
     frames = 0
     held_action = None
+    started = time.monotonic()
+    frame_limit = max_frames if max_frames is not None else max_decisions * 120
     try:
-        while len(records) < max_decisions and frames < max_decisions * 120:
+        while (len(records) < max_decisions and frames < frame_limit
+               and (max_seconds is None or time.monotonic() - started < max_seconds)):
             apply_requested_names(emulator)
             snapshot = adapter.snapshot(emulator)
             state = snapshot.state
@@ -83,8 +95,8 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
                 break
             # Luna's map read is advisory: keep emulating and walking while it
             # runs. Only an unfinished tactical choice needs this brief wait.
-            if (action is None and controller.decision_future and
-                    not controller.decision_future.done()):
+            waiting = controller.decision_future or controller.strategy.future
+            if action is None and waiting and not waiting.done():
                 held_action = renew_movement(
                     emulator, held_action, controller.held_action,
                     overworld=overworld, in_battle=state.in_battle)
@@ -139,5 +151,15 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
             log.close()
         if memory_state_out:
             controller.memory.checkpoint(memory_state_out)
+        if on_summary:
+            from .notebook import notebook
+            counts = dict(controller.memory.db.execute(
+                'SELECT kind,count(*) FROM agent_journal WHERE run_id=? GROUP BY kind', (run_id,)))
+            on_summary({**notebook(controller), 'frames': frames,
+                        'wall_seconds': time.monotonic() - started,
+                        'new_verified_milestones': sorted(set(controller.route.completed)
+                            - set(controller.route.manual_history) - initial_verified),
+                        'event_counts': {k: v - initial_events.get(k, 0) for k, v in counts.items()},
+                        'actions': len(records), 'usage': controller.usage_snapshot()})
         controller.close()
     return records

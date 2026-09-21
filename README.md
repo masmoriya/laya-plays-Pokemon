@@ -2,6 +2,10 @@
 
 > Public stream identity: **Laya Plays Pokémon — Jev’s offline sister AI.**
 
+For the current Gold97 notebook, durable experience, context budgeting, and isolated
+checkpoint benchmarks, see [Agent memory and progress](docs/agent-memory.md).
+The Red prototype measurements and limitations below describe that earlier mode.
+
 For the viewer-facing project story, Twitch copy, offline cost/privacy statement, and
 the exact distinction between Laya, optional Luna, and hosted Jev, see
 [`docs/STREAM.md`](docs/STREAM.md).
