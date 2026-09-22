@@ -78,3 +78,53 @@ The opt-in `tests/test_gold97_progress_replay.py` runs real capture and PC/order
 using `GOLD97_WILD_STATE`, `GOLD97_PC_STATE`, and optional `GOLD97_ROM`. It copies the ROM,
 uses temporary databases, and never writes the player's original save or run database.
 A live remote Luna playthrough has not been established by these local replays.
+
+## Movement at fast-forward speed
+
+The movement executor reads the supported cartridge's in-flight destination,
+not only the coordinate updated after a step finishes. It releases the held
+direction before a turn or arrival can queue an extra step. Destination reads
+must be adjacent and in bounds; uncertain animation releases the input.
+
+Current observed exit geometry takes precedence over historical headings.
+An interior arrival no longer invents a reverse doorway, and visible ordinary
+floor cannot validate an old exit recorded during a fade or relocation.
+Out-of-bounds loading coordinates do not enter map observations. Reaching an
+exploration waypoint only resets loop history if new evidence was obtained.
+Objective building names also match their numbered floors. Unfinished local
+interactions retain priority; previously visited objective rooms lose the
+entry bonus while already inside that building. This keeps Aquarium 2F useful
+without rewarding repeated trips between its floors.
+
+An isolated real-Laya comparison from the Route 120 checkpoint used 16,000
+cartridge frames at 8x with Luna off in each run. Before the fix: 34 distinct
+observed positions, one map, two loop recoveries. After: 105 positions, three
+maps, zero loop recoveries. Both made two Laya calls. These measures demonstrate
+movement improvement, not completion of the current story objective.
+Artifacts are under `runs/movement-fix-20260921/` (ignored local run data).
+
+The opt-in `tests/test_gold97_movement_replay.py` checks actual cartridge turns
+and stopping at 1x, 2x, 4x, and 8x, each at three sampling phases. Set
+`GOLD97_MOVEMENT_STATE` to the Route 120 (40,7) checkpoint and optionally
+`GOLD97_ROM`. It copies the ROM and uses temporary memory. The pre-fix executor
+fails this regression; the updated executor passes all twelve cases.
+The focused movement, navigation, goal-ranking, reward, and interaction suite
+passes 209 tests. A broader check also finds two existing Bugsy approach tests
+failing; their failure was reproduced against the frozen pre-change source.
+They are separate from the Route 120 speed regression.
+
+After restarting the live game with the movement fix, the cartridge completed
+the Aquarium/Rocket milestone (step 14) and advanced to Whitney (step 15).
+The resulting exit snapshot preserves that progress. This is an observed story
+advance, not a claim of full-game autonomy.
+
+## Training Laya
+
+The configured multilingual checkpoint uses mmBERT-base with a decision head
+and a 1,024-token input budget. Gameplay points do not update these weights.
+[Upstream Laya](https://github.com/NandhaKishorM/laya#fine-tuning) supports domain
+fine-tuning with its RLCD workflow. Specializing it for Pokémon would require
+verified decision/outcome examples and evaluation on held-out checkpoints.
+LoRA would require an adapter pipeline compatible with this encoder and head;
+it does not turn the model into a larger generative LLM. No weight training was
+performed for this movement fix.
