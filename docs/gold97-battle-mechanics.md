@@ -1,7 +1,7 @@
 # Gold 97 battle decisions
 
 The local battle planner owns trainer tactics. Laya availability does not gate it.
-The existing wild encounter/capture policy and journey objectives are unchanged.
+Wild encounters share journey readiness checks with recovery and travel leads.
 
 ## Mechanics provenance
 
@@ -32,8 +32,17 @@ switch prompt may use that enemy context instead of the fainted opponent.
   switches that concede an attack. Exclude the active party index, not species.
 - Use a Potion only when it buys survival; prefer a safe finishing attack or a
   healthy replacement where appropriate.
-- Recover at existing verified Center routes for health, status, or exhausted
-  attacks. Finish the visit only after HP, status and decoded PP are restored.
+- Individual damage does not automatically interrupt the Journey. Recover when
+  the remaining capable team cannot handle observed local or required threats;
+  finish a Center visit only after HP, status and decoded PP are restored.
+- Conserve a lone capable partner by fleeing optional encounters. Otherwise
+  budget attacking PP, retaliation, switching and capture turns before engaging.
+  Unknown matchups use conservative level and resource margins, not guarantees.
+- Use a capable travel lead; trainee handoffs belong to deliberate training.
+- Failed escape rolls are reassessed. The pinned engine's enemy substatus bit
+  at C671, player wrap count at C730, and battle type at D230 distinguish actual
+  restrictions; trapped partners cannot voluntarily switch either. These reads
+  are enabled only for the verified cartridge.
 - The executor verifies menus and targets, waits through animations, and retries
   an ignored tap after six unchanged observations. It attempts menu recovery at
   45 unchanged observations and pauses at 90 rather than looping indefinitely.

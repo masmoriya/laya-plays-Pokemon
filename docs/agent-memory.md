@@ -85,3 +85,84 @@ can rank attacks, but does not establish a safe knockout, profitable setup, or
 deliberate sacrifice while weather, screens, and volatile effects are unverified.
 Those strong decisions now require bounded estimates. Full modifier decoding
 and cartridge differential coverage remain future mechanics work.
+
+
+## Exploration and unresolved objects
+
+The navigation grid and artwork now share checkpoint-owned discovery data.
+Only coherent overworld viewport observations reveal terrain and objects. A
+visible doorway is an unknown destination until a recorded traversal identifies
+it. Previously verified movement edges remain usable without inventing terrain
+imagery. Older saves start with unknown imagery outside newly observed cells.
+
+Items, conversations, trainer victories, and obstacles have separate outcomes.
+Manual dialogue is attached to the faced object when that identity is observable;
+otherwise it remains a location-based clue. A cart's movement hint remains
+unresolved after closing the text. Item collection requires pickup confirmation,
+not disappearance from the viewport or an attempted button press.
+
+The exact-build object decoder uses the supported ROM's map-object records at
+`D6FC` and item-ball sprite `4E`. The hexadecimal comments in the pinned
+[sprite constants](https://raw.githubusercontent.com/SoupPotato/gold97/976507f9e6e605050384e9ec12e9651988ae7c46/constants/sprite_constants.asm)
+are stale; the sequential declarations and real checkpoint objects establish
+these sprite values. Object IDs remain stable across item/NPC classification.
+
+Reachable items and obstacles receive bounded investigation before ordinary
+exits. Interaction, approach, and field-action attempts are tracked separately,
+with two attempts per unchanged evidence state. Party moves, pickup evidence,
+object position, or new local dialogue can reopen an experiment. Field moves
+are selected through visible menus; selecting one is not proof of success.
+Three repeated transitions without new evidence exhaust that exit's budget.
+Necessary prerequisite and healing routes remain available. The notebook shows
+object outcomes and attempts; exhausted exploration reports its blocker.
+
+Restart the running game process to load these changes. Existing saves are
+preserved. Focused regressions cover fog, independent pickups, manual cart clues,
+trainer outcomes, field menus, retries, and transition budgets. Isolated real
+mine replays confirmed an X Attack pickup and retention of the cart clue; they
+do not establish a solved Strength puzzle or a completed missing-child rescue.
+
+
+### Movement continuity and last-seen markers
+
+Accepted routes execute their single legal next step locally. Directional input
+stays held along a verified continuation, then releases for a turn, target,
+object, warp, dialogue, or battle. New route choices still use the configured
+policy. Exploration no longer depends on having recorded the opening milestones.
+
+Each map retains a recent movement trail and directed-edge traversal counts.
+Repeated edges become more expensive when no new evidence has appeared, but
+remain traversable for necessary returns. Failed or exhausted exploration
+targets retain their attempt budget across planner resets. The map draws the
+trail and distinct NPC, item, obstacle, and unknown-object markers. Outlined
+markers are last-seen positions, not claims that a moving NPC is still there.
+Partially visible objects are remembered without revealing unseen terrain.
+
+An explicitly restored checkpoint can recover its exact recorded notebook when
+opened through a path alias or another run label. Conflicting or missing
+checkpoint records do not import unrelated run history. A separately restored
+Journey checkpoint keeps its route if the agent notebook has no matching record.
+
+
+### Ladder landing and restart recovery
+
+Observed portals are terminal nodes in route searches: walking to an item or
+viewpoint cannot silently route through a ladder. Landing on a portal still
+allows stepping off it. If local leads are exhausted, returning through that
+portal explicitly steps off and re-enters, under the same transition budget.
+Exploration considers camera viewpoints across walls. Target selection uses
+trail costs; committed execution uses a stable shortest path so new traversal
+penalties do not reverse an active route. Same-map stairs are recorded even
+without an active autonomous target.
+
+Live checkpoints synchronize the UI route before writing agent memory. The
+exact Journey snapshot is authoritative on restore, including manual Undo;
+normalized checkpoint paths and run-label aliases recover that same snapshot.
+A blocked summary describes objects on the current map rather than a distant
+cart.
+
+The isolated `runs/ladder-stable-route-20260921` replay starts on B4F at (19,15).
+It ran 12,000 frames, left the landing, observed new terrain, and did not repeat
+the B4F/B3F ladder pair. Journey remained at step 12. It still recorded eight
+route recoveries elsewhere; this bounded run does not prove all loops are
+eliminated or that the girl was rescued. Player save files were not modified.

@@ -48,6 +48,20 @@ adapter. Initial story guidance covers Bill's house in Pagota. Verified tower
 return geometry remains a known navigation capability. Other story locations are
 discovered through play; there is no complete hardcoded walkthrough.
 
+The operator-requested Westport correction also exposes the verified ferry
+prerequisite during step 11, including in lean tactical context. After Bugsy,
+return from Route 103 through its gate to Westport, enter the port passage, use
+the stairs, and ask the dock sailor for Teknos City. Route 103 instead leads to
+Birdon; its Slowpoke disappear on `EVENT_BEAT_WHITNEY` (bit 1221), not on a
+Westport Rocket event. The adapter reads that flag only for the verified ROM.
+Prerequisite candidates still require reachable cartridge geometry or a visible
+sailor. Necessary backtracking is exempt from the immediate-return penalty.
+Step 11 completes on arrival in Teknos City, never from talking or choosing a
+plan. Existing step IDs and saved completion sets remain unchanged.
+
+- [Route 103 Slowpoke scripts](https://github.com/SoupPotato/gold97/blob/976507f9e6e605050384e9ec12e9651988ae7c46/maps/Route103.asm)
+- [Westport ferry script and badge requirement](https://github.com/SoupPotato/gold97/blob/976507f9e6e605050384e9ec12e9651988ae7c46/maps/WestportPort.asm)
+
 Sources are pinned to the existing verified source revision:
 
 - [Pagota map events](https://github.com/SoupPotato/gold97/blob/976507f9e6e605050384e9ec12e9651988ae7c46/maps/PagotaCity.asm)
