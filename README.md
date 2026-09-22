@@ -4,6 +4,8 @@
 
 For the current Gold97 notebook, durable experience, context budgeting, and isolated
 checkpoint benchmarks, see [Agent memory and progress](docs/agent-memory.md).
+For measured navigation and collection improvements, replay commands, and the
+remaining complete-run requirements, see [Navigation quality](docs/navigation-quality.md).
 The Red prototype measurements and limitations below describe that earlier mode.
 
 For the viewer-facing project story, Twitch copy, offline cost/privacy statement, and

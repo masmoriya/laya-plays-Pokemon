@@ -27,9 +27,9 @@ it does not claim to describe the current running process.
 - World facts, dialogue clues, maps, and route state follow the checkpoint.
 - The experience journal and failed-attempt records survive restores and restarts.
 - Failed attempts are scoped to the goal and observed dialogue/progress evidence.
-  Normal planning excludes matching failures. The recovery policy can recheck
-  old approaches when alternatives are exhausted; these rechecks are recorded.
-  Manual Retry explicitly releases current failure constraints and logs that choice.
+  Planning and recovery exclude matching failures. Relevant new evidence can
+  release an approach; Manual Retry explicitly releases current failure
+  constraints and logs that choice.
 - Reward accounting remains separate and does not update model weights.
 
 Laya receives a compact selection of failed attempts, the current objective, and
@@ -166,3 +166,50 @@ It ran 12,000 frames, left the landing, observed new terrain, and did not repeat
 the B4F/B3F ladder pair. Journey remained at step 12. It still recorded eight
 route recoveries elsewhere; this bounded run does not prove all loops are
 eliminated or that the girl was rescued. Player save files were not modified.
+
+### Shared Qwen planning and navigation outcomes
+
+Qwen plans in the background while Laya selects eligible local investigations or
+continues a committed route. Replies are checked against the current map,
+objective, relevant evidence, and reachability before controlling movement.
+Retired, rejected, and accepted requests have journal entries. A single mapped
+travel target executes locally without spending a Qwen request on an absent choice.
+
+Navigation failures no longer expire after a minute or automatically reopen when
+recovery runs out of alternatives. Adjacent entrances to the same gate share
+cycle history; tile collision failures remain specific. Relevant objective or
+capability evidence can reopen an attempt; explicit Retry clears its constraints.
+Exhausted navigation reports the last local failure. Observed unknown exits retain
+their destination after a recorded traversal, without treating planned travel as
+proof of arrival.
+
+Both models receive a protected compact navigation summary: objective, arrival,
+current approach, local failures, recent action outcomes, and unresolved leads.
+The notebook retains the full history. Context diagnostics report what was kept
+and omitted. This changes retrieval and control, not model weights.
+
+Recent executed moves remain visible below vision, with observed outcomes and
+selection ownership. Qwen explanations remain attributed suggestions, separate
+from learned facts. Restart the game and Laya sidecar to load this implementation;
+the sidecar must report context packing version 2. Player saves are unchanged.
+
+### General progress and HM preparation
+
+Exit retry budgets now depend on completed milestones, field capabilities, and
+verified object outcomes. Camera discoveries and dialogue fragments cannot reset
+cave-entry budgets, and prerequisite labels cannot bypass exit or waypoint limits.
+Exploration waypoints may reopen when new terrain is observed; safety retreats remain
+available. The same rules apply across maps rather than identifying a particular route.
+
+Both Qwen and Laya receive a compact progress contract: the current task, observable
+completion condition, repeated exits, and the actual HM preparation blocker. Laya
+retains Qwen's accepted strategy before optional history, within the loaded model's
+native token budget. Overworld graphics are not submitted as dialogue or recorded as
+completed movement outcomes.
+
+HM preparation distinguishes a compatible party member, verified boxed learner,
+missing badge, and missing eligible capture. A boxed learner can justify a Center PC
+transfer without a previous battle loss, preserving existing field users. Compatible
+eligible wild encounters are remembered as observed search locations; no species or
+encounter location is invented. Capture safety and the existing collection policy
+remain in force. These are explicit memory and execution rules, not model fine-tuning.
