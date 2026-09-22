@@ -40,7 +40,7 @@ none will be downloaded. The command, for whoever has one:
 
 ```
 uv run --directory /path/to/milanboers_jev-plays-pokemon python -m jev_plays_pokemon --rom red.gb
-uv run jpp play --rom red.gb --headless --max-decisions 50 && uv run measure runs/run.jsonl
+uv run lpp play --rom red.gb --headless --max-decisions 50 && uv run measure runs/run.jsonl
 ```
 
 Both need a TypeSafe key. Compare decisions/sec only after writing down what a decision

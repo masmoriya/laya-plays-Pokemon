@@ -14,9 +14,9 @@ screen, coordinate, or HP value is an observation, not proof of story completion
 Inspect memory without starting the emulator:
 
 ```sh
-uv run jpp notes --run-id run-001
-uv run jpp notes --run-id run-001 --json
-uv run jpp notes --run-id run-001 --output 'data/notes'
+uv run lpp notes --run-id run-001
+uv run lpp notes --run-id run-001 --json
+uv run lpp notes --run-id run-001 --output 'data/notes'
 ```
 
 These commands open the database read-only. The output includes historical data;
@@ -50,11 +50,11 @@ answers cannot take control. Requests, accepted plans, and timeouts are journale
 ## Measure changes using real checkpoints
 
 ```sh
-uv run jpp benchmark --rom 'Gold 97 Reforged v6.1c.gbc' \
+uv run lpp benchmark --rom 'Gold 97 Reforged v6.1c.gbc' \
   --state 'data/checkpoints/your-snapshot.state' --database 'data/jev.sqlite' \
   --run-id run-001 --provider executor --repeats 2 --output 'runs/baseline'
 
-uv run jpp benchmark --rom 'Gold 97 Reforged v6.1c.gbc' \
+uv run lpp benchmark --rom 'Gold 97 Reforged v6.1c.gbc' \
   --state 'data/checkpoints/your-snapshot.state' --database 'data/jev.sqlite' \
   --run-id run-001 --provider laya --modes off on --repeats 3 \
   --frames 18000 --seconds 120 --output 'runs/laya-comparison'

@@ -1,6 +1,6 @@
 # Laya Plays Pokémon
 
-> Public stream identity: **Laya Plays Pokémon — Jev’s offline sister AI.**
+> Local Laya control with Qwen vision for Pokémon Gold 97 Reforged.
 
 For the current Gold97 notebook, durable experience, context budgeting, and isolated
 checkpoint benchmarks, see [Agent memory and progress](docs/agent-memory.md).
@@ -19,7 +19,7 @@ Pokemon Red played by a model that only outputs probabilities. Code reads the Ga
 memory into a typed snapshot and hands the model a menu of the moves that are actually
 legal; it returns a probability for each one. The bars are those probabilities.
 
-    uv run jpp play --rom /path/to/your/red.gb --overlay
+    uv run lpp play --rom /path/to/your/red.gb --overlay
 
 ![the overlay over a live rival battle](demo/overlay.gif)
 
@@ -106,12 +106,12 @@ Laya checkpoint ahead of time, then point `LAYA_MODEL_PATH` at the checkpoint di
 (the directory containing `rl_agent_config.json` and `model.safetensors`):
 
 ```
-uv sync --extra laya
+uv sync
 uv run hf download 'convaiinnovations/laya' --include 'multilingual/*' --local-dir '/path/to/laya-cache'
 LAYA_MODEL_PATH='/path/to/laya-cache/multilingual' uv run laya-sidecar --device cpu
 curl 'http://127.0.0.1:8765/health'
-AGENT_PROVIDER=laya uv run jpp play --rom 'red.gb' --headless
-AGENT_PROVIDER=laya uv run jpp live --provider laya --rom 'Gold 97 Reforged v6.1c.gbc'
+uv run lpp play --rom 'red.gb' --headless
+uv run lpp live --rom 'Gold 97 Reforged v6.1c.gbc'
 ```
 
 The sidecar binds to `127.0.0.1:8765` by default. Set `LAYA_BASE_URL`, `LAYA_TIMEOUT_S`,
@@ -127,7 +127,11 @@ For an existing checkpoint on an external drive, create the ignored machine-loca
 `config/laya.local.json` instead of downloading it again:
 
 ```json
-{"model_path": "/Volumes/FILM_EXT/laya-models/multilingual", "device": "cpu"}
+{
+  "model_path": "/path/to/laya-models/multilingual",
+  "device": "cpu",
+  "vlm_python": "/path/to/LayaRuntime/venv/bin/python"
+}
 ```
 
 Environment variables override these local settings. Keep the drive mounted.
@@ -140,11 +144,14 @@ configured endpoint is not listening. Cold startup allows 120 seconds (override 
 `LAYA_STARTUP_TIMEOUT_S`). Set `LAYA_AUTOSTART=0` to keep the sidecar as a
 separately managed process. Without a downloaded checkpoint, the live panel reports the
 missing `LAYA_MODEL_PATH` instead of hiding the setup problem behind a bare connection error.
+The configured vision interpreter hosts Qwen3-VL on `127.0.0.1:8767`; `lpp live`
+reuses it when healthy and starts it when needed.
 
-Laya chooses movement, menu, and battle controls. Luna plans Journey investigations and can read uncertain screens, but never presses
-buttons. Use the Luna strategy On/Off button beside playback to compare modes. Set `LAYA_VISION=0` to disable Codex model
-calls. Navigation still tests safe, in-bounds directions if Luna is unavailable.
-Jev is not used by the Laya path.
+Laya chooses movement, menu, and battle controls. Local Qwen3-VL plans Journey
+investigations and reads uncertain screens, but never presses buttons. Pass
+`--vision codex` to use Luna instead, or `--vision off` to disable vision and strategy
+model calls. Navigation still tests safe, in-bounds directions if vision is unavailable.
+Jev is not used by the default Laya path.
 
 Bring your own ROM. This repo contains no game data and will not help you find any. Save
 states hold copyrighted memory, so they stay out of git.
@@ -153,12 +160,12 @@ states hold copyrighted memory, so they stay out of git.
 
 ```
 uv run python fixtures/make_state.py red-bedroom.state    # drive the intro, headless
-uv run jpp play --rom red.gb --state red-bedroom.state --headless --max-decisions 50
-uv run jpp play --rom red.gb --state red-bedroom.state --frames /tmp/clip --every 2
-uv run jpp probe --rom red.gb                             # watch the decoded state
-uv run jpp state --ram fixtures/ram_battle.bin            # the exact request body
-uv run jpp overlay --replay fixtures/runs/sample.jsonl    # the window, no ROM needed
-uv run jpp overlay --replay fixtures/runs/sample.jsonl --rate 1  # normal replay pace
+uv run lpp play --rom red.gb --state red-bedroom.state --headless --max-decisions 50
+uv run lpp play --rom red.gb --state red-bedroom.state --frames /tmp/clip --every 2
+uv run lpp probe --rom red.gb                             # watch the decoded state
+uv run lpp state --ram fixtures/ram_battle.bin            # the exact request body
+uv run lpp overlay --replay fixtures/runs/sample.jsonl    # the window, no ROM needed
+uv run lpp overlay --replay fixtures/runs/sample.jsonl --rate 1  # normal replay pace
 uv run measure runs/run.jsonl                             # the headline numbers
 ```
 
@@ -168,10 +175,11 @@ how the clip above was recorded. No screen recorder, no cursor, exact length.
 
 ### Local playable MVP
 
-The new live window gives human control immediately, without any model account:
+The default live window resumes the `laya-tested` checkpoint with Laya controlling the
+game and local Qwen planning and reading uncertain screens:
 
 ```
-uv run jpp live --rom '/path/to/your/game.gbc' --speed 1
+uv run lpp live --rom '/path/to/your/game.gbc' --speed 1
 ```
 
 Arrows move. `Z` = A, `X` = B, `Enter` = Start, `Right Shift` = Select. `-` and `+`
@@ -186,15 +194,15 @@ events remain pending until you confirm them. `M` changes map views; `C` confirm
 stage, `U` corrects a manual confirmation, and `O` marks the displayed side stop done.
 The map fits the entire current area, with an Expand action for more detail. Visible NPC
 sprites appear above the saved terrain; they are not baked into its history. Save and
-control actions sit in the footer. The local human-play window labels Jev and Luna as
-not connected rather than implying that either is streaming.
+control actions sit in the footer. The agent panel shows Laya's control state, Qwen's
+planner state, live model calls, and which model is currently thinking.
 ROMs, saves, extracted artwork, and the SQLite run database stay out of git.
 
 The live window automatically resumes the newest snapshot for the same run ID after you
 close and reopen it:
 
 ```
-uv run jpp live --rom '/path/to/your/game.gbc' --run-id run-001
+uv run lpp live --rom '/path/to/your/game.gbc' --run-id laya-tested
 ```
 
 `--state /path/to/file.state` chooses a specific snapshot and restores its corresponding
@@ -237,15 +245,14 @@ Autonomous intent providers use the native Red/Blue route controller or the adap
 neutral button controller for Gold Reforged and other supported cartridges:
 
 ```
-AGENT_PROVIDER=laya uv run jpp play --rom /path/to/your/red.gb --headless
-AGENT_PROVIDER=laya uv run jpp live --provider laya --rom '/path/to/Gold 97 Reforged v6.1c.gbc'
-AGENT_PROVIDER=fake uv run jpp play --rom /path/to/your/red.gb --headless
+uv run lpp play --rom /path/to/your/red.gb --headless
+uv run lpp live --rom '/path/to/Gold 97 Reforged v6.1c.gbc'
+AGENT_PROVIDER=fake uv run lpp play --rom /path/to/your/red.gb --headless
 ```
 
-Laya's tactical sidecar is local. Luna is the optional Codex CLI strategy and screen
-provider. `LAYA_VISION=0` defaults new runs to Luna Off; the per-run UI preference is
-persisted. The Luna strategy toggle disables both planning and screen calls. Luna
-chooses investigations; Laya selects legal controls.
+Laya's tactical sidecar and Qwen vision server are local. The default `live` command
+connects both automatically. The strategy toggle disables Qwen planning and screen calls;
+Laya continues selecting legal controls.
 
 Luna uses the Codex CLI's ChatGPT login, not an OpenAI API key. Verify or start that
 browser-based login before launching the game:
