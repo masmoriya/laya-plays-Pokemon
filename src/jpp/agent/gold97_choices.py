@@ -1,6 +1,14 @@
 """Commit a dialogue answer once, then execute its visible menu position."""
 
 
+def conversation_context(owner):
+    observation = owner.strategy.observations
+    pending = observation.pending or {}
+    npc = observation.data['npcs'].get(pending.get('id'), {})
+    return {'pages': npc.get('pages', [])[-6:],
+            'rule': 'Decline optional purchases. Do not repeat a completed conversation without new objective evidence.'}
+
+
 def yes_no_rows(lines, cursor=None):
     labels = [line.strip().upper() for line in lines]
     if cursor is not None:
@@ -38,6 +46,13 @@ def dialogue_options(owner, state):
     if rows is None:
         owner.dialogue_choice = None
         return None
+    # An offer's identity is often on an earlier page, not the Yes/No page.
+    import re
+    text = ' '.join(conversation_context(owner)['pages'] + list(state.screen_lines)).upper()
+    if re.search(r'\b(?:BUY|SELL|PRICE|COSTS?|SLOWPOKETAIL)\b', text):
+        owner.dialogue_choice = (choice_key(state), 'no')
+        button = answer_button(state, 'no')
+        return {button: 'Decline the optional purchase'} if button else {}
     selected = getattr(owner, 'dialogue_choice', None)
     if selected and selected[0] == choice_key(state):
         button = answer_button(state, selected[1])

@@ -34,6 +34,8 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
     current_optional = bool(area_terms & _OPTIONAL)
     active_gym = "gym" in area_terms and area_terms <= goal_terms
     inside_goal = bool(area_terms - _GENERIC) and area_terms <= goal_terms
+    # A route mentioned as a travel prerequisite is not an objective building.
+    objective_room = inside_goal and not bool(area_terms & {'route', 'city', 'town'})
     ranked = []
     for order, candidate in enumerate(candidates):
         text = " ".join((candidate.get("label", ""), candidate.get("destination", "")))
@@ -44,7 +46,7 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
         reasons = [f"{candidate.get('kind', 'task')} base {reward}"]
         interaction = candidate.get('kind') == 'talk' or candidate.get('reobserve_interaction')
         if interaction:
-            if (active_gym or inside_goal) and candidate.get('category') != 'obstacle':
+            if (active_gym or objective_room) and candidate.get('category') != 'obstacle':
                 reward += milestone_reward
                 reasons.append("investigate unfinished interactions in the objective building")
             elif "gym" in area_terms:
@@ -83,7 +85,7 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
                     "goal_destination": exact_destination,
                     "within_goal": exact_destination and inside_goal,
                     "goal_interaction": candidate.get('goal_interaction', False)
-                        or (inside_goal and interaction
+                        or (objective_room and interaction
                             and candidate.get('category') != 'obstacle'),
                     "reward_reason": "; ".join(reasons), "_rank_order": order}
         ranked.append(enriched)
@@ -101,8 +103,9 @@ def rank_interactions(targets, reward):
         category = target.get('category')
         if category == 'obstacle':
             continue  # A cart is not automatically a prerequisite for every goal.
-        target['journey_reward'] = max(target['journey_reward'], reward * 3 if category == 'item' else reward * 0.6)
-        if category == 'item':
+        pickup = category in {'item', 'resource'}
+        target['journey_reward'] = max(target['journey_reward'], reward * 3 if pickup else reward * 0.6)
+        if pickup:
             target['investigation_priority'] = True
-        target['reward_reason'] = 'Reachable observed item' if category == 'item' else 'Reachable unfinished conversation'
+        target['reward_reason'] = 'Reachable observed collectible' if pickup else 'Reachable unfinished conversation'
     return sorted(targets, key=lambda t: -t.get('journey_reward', 0))

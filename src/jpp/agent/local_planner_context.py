@@ -18,10 +18,14 @@ def compact(value):
 
 def planner_context(payload):
     result = compact(select(payload, ('goal', 'map', 'directive', 'operator_guidance',
-        'operator_notes', 'route_progress', 'failed_attempts', 'recent')))
-    result['candidates'] = [select(item, ('id', 'kind', 'cell', 'label', 'completion',
+        'operator_notes', 'route_progress', 'failed_attempts', 'recent', 'navigation_memory', 'progress')))
+    result['candidates'] = [select(item, ('id', 'kind', 'cell', 'direction', 'reentry', 'label', 'completion',
         'journey_reward', 'reward_reason', 'destination_key', 'prerequisite',
-        'goal_route', 'goal_interaction')) for item in payload['candidates'][:8]]
+        'goal_route', 'goal_interaction', 'destination_evidence', 'path_steps',
+        'category')) for item in payload['candidates'][:8]]
+    result['unfinished_interactions'] = [select(item, ('id', 'cell', 'category', 'name',
+        'visible', 'status', 'outcome', 'reachability')) for item in payload.get('interactions', [])
+        if item.get('status') == 'pending'][:8]
     result['clues'] = [select(item, ('id', 'text', 'map')) for item in payload.get('clues', [])[-4:]]
     navigation = payload.get('navigation') or {}
     result['navigation'] = compact(select(navigation, ('position', 'exits', 'fresh',
@@ -30,6 +34,9 @@ def planner_context(payload):
                           for item in payload.get('interactions', []) if item.get('pages')][-3:]
     result['dialogue'] = [{**item, 'pages': [p[:300] for p in item['pages'][-2:]]}
                           for item in result['dialogue']]
+    travel = payload.get('travel') or {}
+    result['travel'] = compact(select(travel, ('destination', 'next_map', 'next_stop', 'instruction')))
+    result['travel']['route'] = travel.get('route', [])[:12]
     result['connections'] = compact(payload.get('connections', [])[-4:])
     world = payload.get('world') or {}
     result['world'] = select(world, ('source', 'location', 'badges', 'owned_hms', 'trail'))
@@ -53,18 +60,20 @@ def planner_context(payload):
                 del result[key]
                 break
         else:
-            if len(result['candidates']) > 1:
-                result['candidates'].pop()
-            elif len(result['clues']) > 1:
-                result['clues'].pop(0)
-            elif result.get('dialogue'):
-                result['dialogue'].pop(0)
-            elif result.get('failed_attempts'):
-                result['failed_attempts'].pop(0)
-            elif 'nearby_terrain' in result['navigation']:
+            if 'nearby_terrain' in result['navigation']:
                 del result['navigation']['nearby_terrain']
             elif 'entities' in result['navigation']:
                 del result['navigation']['entities']
+            elif result.get('dialogue'):
+                result['dialogue'].pop(0)
+            elif result.get('failed_attempts') and result.get('navigation_memory'):
+                result['failed_attempts'].pop(0)  # Protected local failures remain above.
+            elif len(result['clues']) > 1:
+                result['clues'].pop(0)
+            elif len(result['candidates']) > 1:
+                result['candidates'].pop()
+            elif result.get('failed_attempts'):
+                result['failed_attempts'].pop(0)
             elif result.get('prerequisites'):
                 result['prerequisites'] = None
             elif result.get('clues'):

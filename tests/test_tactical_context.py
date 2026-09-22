@@ -62,3 +62,54 @@ def test_ferry_prerequisite_reaches_actual_tokenizer(agent):
     assert packed['prerequisites'] == prerequisite['instruction']
     assert packed['screen_text'] == state['screen_text']
     assert meta['retained_tokens'] <= meta['budget']
+
+
+def test_travel_next_hop_reaches_laya_tokenizer(agent):
+    state = {'goal': 'Reach Birdon Town', 'decision_kind': 'explore',
+             'map': 'Teknos City', 'position': [23, 13],
+             'journey': {'travel': {'destination': 'Birdon Town', 'next_map': '04:08'}},
+             'memory': ['Old observations'] * 500}
+    packed, meta = pack_context(state, _questions({'down': 'Travel to Teknos Port Passage'}), agent)
+    assert packed['travel'] == state['journey']['travel']
+    assert meta['retained_tokens'] <= meta['budget']
+
+
+def test_navigation_memory_is_protected_under_pressure(agent):
+    summary = {'objective': 17, 'arrived_from': '09:08',
+               'failed': ['geometry:0A:01:22:5: Repeated map cycle'],
+               'recent': ['up: Moved [22, 6] to [22, 5]'],
+               'unresolved': ['unknown:1 at [12, 4]']}
+    state = {'goal': 'Reach Birdon Town after Whitney clears Route 103',
+             'decision_kind': 'explore', 'map': 'Westport City', 'position': [22, 6],
+             'journey': {'navigation_memory': summary}, 'memory': ['Old history'] * 500}
+    packed, meta = pack_context(state, _questions({'left': 'Investigate exit', 'up': 'Gate'}), agent)
+    assert packed['navigation_memory'] == summary
+    assert meta['retained_tokens'] <= meta['budget']
+    assert 'memory' in meta['omitted_fields']
+
+
+def test_active_offer_survives_context_pressure(agent):
+    conversation = {'pages': ['How would you like this SLOWPOKETAIL?', 'It costs 1000000.'],
+                    'rule': 'Decline optional purchases.'}
+    state = {'goal': 'Travel to Birdon Town', 'decision_kind': 'dialogue',
+             'map': 'Route 103', 'position': [9, 13],
+             'screen_text': ['YES', 'NO', 'You will want this!'],
+             'conversation': conversation, 'memory': ['Old observation'] * 500}
+    packed, _ = pack_context(state, _questions({'yes': 'Accept', 'no': 'Decline'}), agent)
+    assert packed['conversation'] == conversation
+
+
+def test_progress_and_qwen_handoff_are_protected(agent):
+    progress = {'task':'Defeat Morty', 'success':'Fog Badge observed',
+                'hm': {'move':'Surf', 'action':'badge', 'party_compatible':[],
+                       'boxed':[], 'badge_ready':False,
+                       'next':'Defeat Morty; catch a compatible Pokemon when encountered'},
+                'avoid':['03:11:(9, 11)'], 'rule':'No repeated exits without new prerequisites'}
+    strategy = {'target':'gym', 'explanation':'Earn the badge needed for Surf',
+                'completion':'Fog Badge observed', 'evidence':['gym']}
+    state = {'goal':'Defeat Morty', 'decision_kind':'explore', 'map':'Birdon Town',
+             'position':[15,10], 'screen_text':[], 'strategy':strategy,
+             'journey':{'progress':progress}, 'memory':['Old observation']*500}
+    packed, _ = pack_context(state, _questions({'up':'Gym','down':'Explore'}), agent)
+    assert packed['progress'] == progress
+    assert packed['strategy'] == strategy

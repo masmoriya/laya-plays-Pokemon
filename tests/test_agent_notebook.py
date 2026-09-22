@@ -49,13 +49,14 @@ def test_planner_can_finish_after_five_seconds_within_its_deadline(tmp_path, mon
         pending.set_running_or_notify_cancel()
         strategy.future = pending
         strategy.plan_started_at = 10
-        monkeypatch.setattr('jpp.agent.journey_strategy.monotonic', lambda: 16)
+        monkeypatch.setattr('jpp.agent.journey_async.monotonic', lambda: 16)
         state = NS(map_group=9, map_number=2, x=1, y=1, map_width=6, map_height=6)
         terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
         assert strategy.options(state, terrain) == {}
         assert strategy.future is pending and not strategy.retired
         target = {'id': 'explore:1', 'kind': 'explore', 'cell': [3, 1],
-                  'label': 'Explore', 'completion': 'Reach tile'}
+                  'label': 'Explore', 'completion': 'Reach tile', 'map': '09:02'}
+        monkeypatch.setattr('jpp.agent.journey_async.candidates', lambda *a, **k: [target])
         strategy.payload = {'candidates': [target], 'clues': []}
         pending.set_result(({'target': 'explore:1', 'explanation': 'Explore',
                              'completion': 'Reach tile', 'evidence': ['explore:1']}, {}))

@@ -40,15 +40,19 @@ class RosterService:
                 not fully_recovered(state) or self.owner.terrain is None):
             return False, None
         failed_foe = self.owner.training.data.get('readiness_failure')
+        from .hm_preparation import preparation
+        hm = (preparation(state, self.owner.route.now, self.owner.memory)
+              if getattr(state, 'owned_hms', ()) and getattr(state, 'storage_verified', False) else {})
+        required_move = hm.get('move') if hm.get('action') == 'withdraw' else None
         # Routine healing does not justify rotating the team at the PC.
-        if not failed_foe or self.owner.recovery is not None:
+        if (not failed_foe and not required_move) or self.owner.recovery is not None:
             return False, None
-        plan = roster_plan(state, Mon(**failed_foe))
+        plan = roster_plan(state, Mon(**failed_foe) if failed_foe else None, required_move)
         if plan is None:
             return False, None
         self.signature = (tuple(m.identity for m in state.party),
                           tuple((m.identity,m.storage_box) for m in state.box_roster),
-                          self.owner.route.now, str(failed_foe))
+                          self.owner.route.now, str(failed_foe), required_move)
         if self.signature in self.attempted:
             return False, None
         terrain = self.owner.terrain

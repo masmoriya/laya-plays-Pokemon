@@ -15,7 +15,8 @@ def notebook(controller):
     return {
         'run_id': memory.run_id, 'goal': MAIN.get(controller.route.now, 'Journey complete'),
         'next': plan.get('explanation') or (controller.strategy.target or {}).get('label', 'No committed plan'),
-        'blocker': controller.pause_reason or '',
+        'blocker': controller.pause_reason or (data.get('blocker', '')
+                    if controller.strategy.status == 'blocked' else ''),
         'continued_route_steps': memory.world.get('continued_route_steps', 0),
         'exploration': {key: {'seen_cells': len(area.get('discovery', {}).get('tiles', {})),
                               'visited_cells': len(area.get('visited', []))}

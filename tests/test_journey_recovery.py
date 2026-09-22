@@ -5,7 +5,7 @@ from jpp.agent.journey_targets import candidates
 from jpp.gold97_collision import Gold97CollisionMap
 
 
-def test_exhausted_leads_retry_oldest_and_preserve_failures(controller):
+def test_exhausted_leads_require_new_evidence_or_explicit_retry(controller):
     strategy = controller.strategy
     s = state()
     strategy.observe(s, (), True)
@@ -18,14 +18,13 @@ def test_exhausted_leads_retry_oldest_and_preserve_failures(controller):
         strategy.target = target
         strategy.failed('Movement loop')
     failures = controller.memory.experience.failures(controller.route.now)
-    assert strategy.options(s, terrain)
+    assert not strategy.options(s, terrain)
+    assert strategy.status == 'blocked'
     assert not controller.paused
-    assert {t['id'] for t in strategy.payload['candidates']} == {tasks[0]['id']}
     assert controller.memory.experience.failures(controller.route.now) == failures
-    strategy.chosen(next(iter(strategy.local_targets)))
-    strategy.failed('Still blocked')
+    controller.memory.experience.retry(controller.route.now)
+    controller.replan()
     assert strategy.options(s, terrain)
-    assert strategy.payload['candidates'][0]['id'] == tasks[1]['id']
     assert controller.route.now == 6
 
 

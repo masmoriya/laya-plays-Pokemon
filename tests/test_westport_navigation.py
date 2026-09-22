@@ -52,7 +52,7 @@ def test_ferry_menu_is_selected_only_for_verified_ferry_goal(controller, cursor,
     s.mechanics_verified = False
     assert set(controller._options(s, (), False)) == {'b'}
     s.mechanics_verified = True
-    controller.route = RouteProgress(set(range(1, 12)))
+    controller.route = RouteProgress(set(range(1, 17)))
     assert set(controller._options(s, (), False)) == {'b'}
 
 

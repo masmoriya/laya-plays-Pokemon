@@ -107,7 +107,7 @@ def serve(service, host=DEFAULT_HOST, port=DEFAULT_PORT):
                 self._send(200, {"service": "laya-sidecar", "health": "/health", "decision_endpoint": "/v1/decide"})
             elif self.path == "/health":
                 self._send(200, {"status": "ok", "model": service.model_name,
-                                 "context_packing_version": 1})
+                                 "context_packing_version": 2})
             else:
                 self._send(404, {"error": "not found"})
 

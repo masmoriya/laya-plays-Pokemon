@@ -7,6 +7,17 @@ BATTLE_TEXT = ('GOT AWAY', 'WILD ', 'BROKE FREE', 'GAINED', 'GREW TO', 'FAINTED'
 MENU_TEXT = ('FIGHT', 'PACK', 'CANCEL', 'WITHDRAW', 'DEPOSIT', 'SAVE', 'OPTION')
 
 
+def joined_pages(pages):
+    """Retain a conversation's continuation without repeating scrolling lines."""
+    words = []
+    for page in pages:
+        following = page.split()
+        overlap = next((size for size in range(min(len(words), len(following)), 0, -1)
+                        if words[-size:] == following[:size]), 0)
+        words.extend(following[overlap:])
+    return ' '.join(words)
+
+
 def dialogue_text(text):
     text = ' '.join(text.split())
     upper = text.upper()

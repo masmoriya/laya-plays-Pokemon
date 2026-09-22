@@ -4,7 +4,7 @@ from .gold97_mechanics import types, move_info, multiplier
 FIELD_MOVES = frozenset(('CUT','SURF','STRENGTH','FLASH','FLY','WATERFALL','WHIRLPOOL'))
 
 
-def roster_plan(state, opponent=None):
+def roster_plan(state, opponent=None, required_move=None):
     if not state.mechanics_verified or not state.storage_verified or not state.box_roster:
         return None
     party, boxed = list(state.party), list(state.box_roster)
@@ -22,11 +22,14 @@ def roster_plan(state, opponent=None):
         fields = set().union(*(set(move.upper() for move in m.moves) for m in selected))
         candidates = [m for m in all_mons if m not in selected]
         def score(mon):
+            from .hm_preparation import compatible
             moves = {move.upper() for move in mon.moves}
             # Preserve required field users, then coverage; retain ties in party.
             matchup = max((multiplier(info['type'], types(opponent))
                            for name in mon.moves if (info := move_info(name)) and info['power']), default=0) if opponent else 0
-            return (len((needed - fields) & moves), matchup, len(set(types(mon)) - covered),
+            missing_hm = required_move and not any(compatible(m, required_move) for m in selected)
+            return (bool(missing_hm and compatible(mon, required_move)),
+                    len((needed - fields) & moves), matchup, len(set(types(mon)) - covered),
                     mon.level, mon in party)
         selected.append(max(candidates, key=score))
     # Keep an existing healthy trainee when the final slot is otherwise redundant.
@@ -34,7 +37,9 @@ def roster_plan(state, opponent=None):
     if trainee not in selected and trainee.level < selected[0].level:
         last = selected[-1]
         other_fields = set().union(*({v.upper() for v in m.moves} for m in selected[:-1]))
-        if needed <= other_fields:
+        from .hm_preparation import compatible
+        preserves_hm = not required_move or any(compatible(m, required_move) for m in selected[:-1] + [trainee])
+        if needed <= other_fields and preserves_hm:
             selected[-1] = trainee
     desired = {m.identity for m in selected}
     incoming = next((m for m in selected if m in boxed), None)

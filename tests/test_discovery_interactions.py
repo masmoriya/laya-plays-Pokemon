@@ -113,6 +113,8 @@ def test_transition_budget_survives_restart_and_resets_only_on_evidence(memory):
         other.close()
     assert filter_cycles([{**t, 'retreat_reason': 'Heal injured party'}], memory)
     knowledge(memory)['clues'].append({'text':'New clue'})
+    assert not filter_cycles([t], memory)  # Incidental chatter cannot reopen a loop.
+    memory.world['field_capabilities'] = ['newly verified ability']
     assert filter_cycles([t], memory)
 
 

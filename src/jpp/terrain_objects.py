@@ -12,6 +12,7 @@ _MAP_OBJECT_TYPE = 8
 _MAP_OBJECT_STRUCT_ID = 0
 _OBJECTTYPE_ITEMBALL = 1
 _SPRITE_POKE_BALL = 0x4E
+_SPRITE_FRUIT_TREE = 0x59
 
 
 def _wram(memory, address):
@@ -52,6 +53,8 @@ def object_kind(memory, state, identity):
         index = int(identity.split(':')[1])
         base = _GOLD97_MAP_OBJECTS + index * _MAP_OBJECT_LENGTH
         sprite = _wram(memory, base + _MAP_OBJECT_SPRITE)
+        if sprite == _SPRITE_FRUIT_TREE:
+            return 'resource'
         if _wram(memory, base + _MAP_OBJECT_TYPE) & 0x0F == 2:
             return 'npc'
         if sprite in {0x54, 0x55, 0x56}:

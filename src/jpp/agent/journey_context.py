@@ -6,14 +6,14 @@ from .journey_prerequisites import prerequisite_context
 
 
 def objective_clues(clues, goal):
-    terms = _terms(goal) - _GENERIC - {"toward", "return", "situation"}
+    terms = _terms(goal) - _GENERIC - {"toward", "return", "situation", "receive", "call", "about", "professor"}
     return [clue for clue in clues if terms & _terms(clue["text"])]
 
 
 def strategy_context(self, state):
     goal = MAIN.get(self.owner.route.now, "Journey complete")
     words = {word.strip(".,").lower() for word in goal.split() if len(word) > 3}
-    clues = self.data["clues"]
+    clues = objective_clues(self.data["clues"], goal)
     relevant = [clue for clue in clues[:-20]
                 if any(word in clue["text"].lower() for word in words)]
     snapshot = self.owner.map_state.snapshot
@@ -31,7 +31,8 @@ def strategy_context(self, state):
         f"A verified Journey milestone is worth "
         f"{self.owner.rewards.weights['milestone']} reward points. Choose the highest "
         "Journey-reward candidate unless current evidence makes it unsafe or unreachable. "
-        "Investigate unresolved objects, collect observed items, and follow dialogue clues. "
+        "Follow the travel route. Dialogue is an observation, not automatically a quest or unfinished task. "
+        "Only pursue dialogue that gives concrete evidence for the current objective. "
         "An interaction is not proof that an obstacle is resolved. "
         "Do not trade milestone progress for unrelated buildings, services, "
         "optional rooms, training, or exhaustive map coverage."
@@ -59,7 +60,10 @@ def strategy_context(self, state):
     from ..journey_checklist import journey_steps
     prerequisite = prerequisite_context(state, scope)
     from .planner_world import world_context
-    return {"world": world_context(self.owner, state), "hm_journey": hm_steps, "navigation": navigation, "goal": goal, "directive": directive,
+    from .travel_atlas import travel_context
+    from .navigation_memory import navigation_memory
+    from .progress_contract import contract
+    return {"progress": contract(self.owner, state), "navigation_memory": navigation_memory(self, state), "travel": travel_context(state, scope), "world": world_context(self.owner, state), "hm_journey": hm_steps, "navigation": navigation, "goal": goal, "directive": directive,
             "prerequisites": prerequisite,
             "journey_steps": journey_steps(hm_steps, prerequisite),
             "context_mode": "lean" if lean else "standard",
@@ -93,24 +97,31 @@ def strategy_summary(self):
     map_key = f'{self.map_key[0]:02X}:{self.map_key[1]:02X}' if self.map_key else None
     from .mine_guidance import mine_context
     mine = mine_context(getattr(self.observations, 'state', None), self.owner.route.now)
-    next_label = (obstruction_summary(self.data, map_key) if self.status == 'blocked' else
+    next_label = ((self.data.get('blocker') or obstruction_summary(self.data, map_key)) if self.status == 'blocked' else
                   plan.get("explanation") or (self.target or {}).get("label", "Investigate local leads"))
     from .journey_hms import hm_journey
     hm_steps = hm_journey(getattr(self.observations, 'state', None), self.owner.route.now)
     active = hm_steps['active']
-    if active:
+    if active and not self.target and not plan and self.status != 'blocked':
         next_label = active['label']
+    from .journey_evidence import joined_pages
+    clue = clues[-1] if clues else {}
+    speaker = self.data['npcs'].get(clue.get('interaction'), {})
+    known = joined_pages(speaker.get('pages', [])) or clue.get('text', 'No clues for this objective yet')
     from ..journey_checklist import journey_steps
     prerequisite = prerequisite_context(getattr(self.observations, 'state', None), self.owner.route.now)
     return {"hm_journey": hm_steps, "enabled": self.enabled, "status": self.status,
             "planner": self.label, "plan": plan,
             "last_response": self.data.get("last_response"),
+            "accepted_target": (self.target or {}).get('label'),
+            "selection_source": self.data.get('selection_source'),
+            "plan_id": self.data.get('plan_id'), "plan_review": self.data.get('plan_review'),
             "error": getattr(self, "last_error", ""),
             "journey_steps": journey_steps(hm_steps, prerequisite),
             "lean_context": self.owner.memory.experience.lean_context(self.owner.route.now),
             "operator_guidance": self.owner.memory.experience.active_guide(self.owner.route.now),
             "goal": goal,
-            "known": mine["known"] if mine else clues[-1]["text"] if clues else "No clues for this objective yet",
+            "known": mine["known"] if mine else known,
             "next": mine["next"] if mine and not self.target and not active else next_label,
             "npcs": list(self.data["npcs"].values()), "events": self.data["events"][-8:],
             "stats": self.data["stats"], "rewards": self.owner.rewards.summary(),

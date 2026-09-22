@@ -80,6 +80,10 @@ class LayaProvider:
         response = self._post({"state": state, "options": options})
         if 'journey' in state and not (response.get('model_input') or {}).get('context'):
             raise RuntimeError('Restart the Laya sidecar to enable budgeted journey context')
+        protected = (state.get('journey') or {}).get('navigation_memory')
+        retained = (response.get('model_input') or {}).get('state') or {}
+        if protected and retained.get('navigation_memory') != protected:
+            raise RuntimeError('Restart the Laya sidecar to retain navigation outcome memory')
         action = response.get("action")
         if action not in options:
             raise ValueError("Laya action outside allowlist")
@@ -134,7 +138,7 @@ class LayaProvider:
 
     @staticmethod
     def _check_capabilities(payload):
-        if not isinstance(payload, dict) or payload.get("context_packing_version") != 1:
+        if not isinstance(payload, dict) or payload.get("context_packing_version") != 2:
             raise RuntimeError("Restart the Laya sidecar to enable budgeted journey context")
         return payload
 

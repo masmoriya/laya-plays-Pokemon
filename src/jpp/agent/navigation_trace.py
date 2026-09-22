@@ -1,11 +1,11 @@
 """Observed movements and bounded target retries, independent of planner resets."""
 import json
-from .exploration_cycles import evidence
+from .progress_contract import progress_stamp
 
 
 def progress_trace(memory):
     data = memory.world.setdefault('navigation_trace', {})
-    stamp = repr(evidence(memory))
+    stamp = repr((memory.world.get('discovery_revision', 0), progress_stamp(memory)))
     if data.get('evidence') != stamp:
         data.update(evidence=stamp, edges={}, targets={})
     return data
@@ -53,5 +53,5 @@ def record_target(memory, target):
 
 def unexhausted(memory, targets):
     counts = progress_trace(memory)['targets']
-    return [t for t in targets if t.get('prerequisite') or t.get('retreat_reason')
+    return [t for t in targets if t.get('retreat_reason')
             or counts.get(target_stamp(t), 0) < 2]

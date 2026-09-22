@@ -398,7 +398,7 @@ def test_discovery_does_not_interrupt_a_committed_route_or_mark_an_obstacle(cont
     assert controller.memory.map("09:02")["blocked"] == []
 
 
-def test_stale_blocked_exits_are_rechecked_automatically(controller, monkeypatch):
+def test_stale_blocked_exits_are_rechecked_once_until_explicit_retry(controller, monkeypatch):
     s = state()
     strategy = controller.strategy
     strategy.observe(s, (), True)
@@ -412,13 +412,16 @@ def test_stale_blocked_exits_are_rechecked_automatically(controller, monkeypatch
     assert strategy.options(s, terrain)
     assert not controller.paused
     assert not area['blocked']
-    # Repeated failures back off, then retry without manual resume.
+    # Elapsed time alone cannot reopen the same failed probe.
     area['blocked'] = blocked.copy()
     assert not strategy.options(s, terrain)
     assert not controller.paused
     assert not strategy.options(s, terrain)
     monkeypatch.setattr("jpp.agent.journey_planning.monotonic",
                         lambda: strategy.recovery_retry_at + 1)
+    assert not strategy.options(s, terrain)
+    controller.memory.experience.retry(controller.route.now)
+    controller.replan()
     assert strategy.options(s, terrain)
     assert not controller.paused
 

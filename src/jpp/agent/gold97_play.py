@@ -11,6 +11,7 @@ from ..gold97_collision import Gold97CollisionCache
 from ..route_progress import RouteProgress
 from .gold97_controller import Gold97Controller
 from .gold97_input import renew_movement, press_action, release_restored_buttons
+from ..navigation_metrics import NavigationMetrics
 
 
 
@@ -67,10 +68,13 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
     initial_events = dict(controller.memory.db.execute(
         'SELECT kind,count(*) FROM agent_journal WHERE run_id=? GROUP BY kind', (run_id,)))
     records = []
+    metrics = NavigationMetrics(controller.memory)
     log = Path(log_path).open("a") if log_path else None
     frames = 0
     held_action = None
     started = time.monotonic()
+    provider_wait_seconds = 0
+    stop_reason = None
     frame_limit = max_frames if max_frames is not None else max_decisions * 120
     try:
         while (len(records) < max_decisions and frames < frame_limit
@@ -87,17 +91,30 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
             action = controller.step(state, frame=frame, entities=entities,
                                      overworld=overworld, terrain=terrain,
                                      prompt_visible=prompt)
+            metrics.observe(controller, state, overworld, frames)
             if controller.paused and controller.playback.status == "blocked":
+                stop_reason = 'blocked'
                 print(f"Gold 97 autonomous play paused: {controller.pause_reason}")
+                break
+            if getattr(getattr(policy, 'provider', None), 'choice_required', False):
+                stop_reason = 'model_choice_required'
                 break
             # Luna's map read is advisory: keep emulating and walking while it
             # runs. Only an unfinished tactical choice needs this brief wait.
-            waiting = controller.decision_future or controller.strategy.future
+            waiting = controller.decision_future or (controller.strategy.future if not controller.strategy.shared_control else None)
             if action is None and waiting and not waiting.done():
                 held_action = renew_movement(
                     emulator, held_action, controller.held_action,
                     overworld=overworld, in_battle=state.in_battle)
-                time.sleep(0.02)
+                wait_started = time.monotonic()
+                # No emulated frame passes during inference. Re-observing the
+                # same frame would advance cooldowns/interaction timeouts and
+                # rebuild identical model context for every polling interval.
+                from concurrent.futures import wait
+                remaining = (60 if max_seconds is None else
+                             min(60, max(0, max_seconds - (wait_started - started))))
+                wait([waiting], timeout=remaining)
+                provider_wait_seconds += time.monotonic() - wait_started
                 continue
             pressed = False
             if action:
@@ -120,6 +137,9 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
                     "battle": state.battle.kind}, "choice": action,
                     "luna_enabled": controller.strategy.enabled,
                     "action_source": controller.action_source,
+                    "selection_source": controller.strategy.data.get('selection_source'),
+                    "plan_id": controller.strategy.data.get('plan_id'),
+                    "target": controller.strategy.target,
                     "journey_step": controller.route.now,
                     "probabilities": decision.probabilities if decision else {},
                     "confidence": decision.confidence if decision else None,
@@ -152,8 +172,15 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
             from .notebook import notebook
             counts = dict(controller.memory.db.execute(
                 'SELECT kind,count(*) FROM agent_journal WHERE run_id=? GROUP BY kind', (run_id,)))
+            elapsed = time.monotonic() - started
+            reason = stop_reason or ('frame_budget' if frames >= frame_limit else
+                                     'action_budget' if len(records) >= max_decisions else 'time_budget')
             on_summary({**notebook(controller), 'frames': frames,
-                        'wall_seconds': time.monotonic() - started,
+                        'wall_seconds': elapsed, 'stop_reason': reason,
+                        'provider_wait_seconds': provider_wait_seconds,
+                        'emulated_seconds': frames / 59.7275,
+                        'achieved_speed': frames / 59.7275 / elapsed if elapsed else 0,
+                        'navigation': metrics.summary(controller),
                         'new_verified_milestones': sorted(set(controller.route.completed)
                             - set(controller.route.manual_history) - initial_verified),
                         'event_counts': {k: v - initial_events.get(k, 0) for k, v in counts.items()},

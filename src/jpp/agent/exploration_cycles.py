@@ -10,10 +10,12 @@ def evidence(memory):
 
 
 def counts(memory):
-    stamp = repr(evidence(memory))
+    # New camera tiles and dialogue fragments do not justify another cave lap.
+    from .progress_contract import progress_stamp
+    stamp = progress_stamp(memory)
     data = memory.world.setdefault('transition_budget', {})
     if data.get('evidence') != stamp:
-        data.update(evidence=stamp, counts={})
+        data.update(evidence=stamp, counts={}, portals={})
     return data.setdefault('counts', {})
 
 
@@ -25,11 +27,19 @@ def record_transition(memory, source, cell, destination):
     visits = counts(memory)
     key = transition_key(source, cell, destination)
     visits[key] = visits.get(key, 0) + 1
+    memory.world['transition_budget'].setdefault('portals', {})[key] = {
+        'map': source, 'kind': 'exit', 'cell': list(cell), 'destination_key': destination}
     memory.save()
 
 
 def filter_cycles(targets, memory):
     visits = counts(memory)
-    return [t for t in targets if t['kind'] != 'exit' or t.get('prerequisite')
-            or t.get('retreat_reason') or visits.get(transition_key(
-                t['map'], t['cell'], t.get('destination_key', '')), 0) < 3]
+    from .navigation_memory import same_approach
+    portals = memory.world['transition_budget'].get('portals', {})
+    def attempts(target):
+        key = transition_key(target['map'], target['cell'], target.get('destination_key', ''))
+        return sum(count for stamp, count in visits.items()
+                   if stamp == key or (stamp in portals and same_approach(
+                       target, portals[stamp], 'Repeated map cycle')))
+    return [t for t in targets if t['kind'] != 'exit'
+            or t.get('retreat_reason') or attempts(t) < 3]

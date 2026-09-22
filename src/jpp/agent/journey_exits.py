@@ -15,7 +15,7 @@ def exit_candidates(state, memory, reachable, excluded, terrain=None):
     geometry = known_exits(state, terrain)
     destinations = {f"{group:02X}:{number:02X}" for _, _, _, group, number in geometry}
     geometric = {}
-    for x, y, direction, group, number in geometry:
+    for x, y, direction, group, number in sorted(geometry, key=lambda e: distance(e[:2])):
         cell = (x, y)
         if not direction and terrain is not None:
             # Cartridge collision constants: directional warp carpets trigger
@@ -37,6 +37,12 @@ def exit_candidates(state, memory, reachable, excluded, terrain=None):
                             if (x+dx, y+dy) in reachable and (x+dx, y+dy) not in portals), None)
             if reentry is None:
                 continue
+        # Unknown cartridge warp destinations become known only after traversal.
+        if not group or not number:
+            observed = {c['to'] for c in memory.world['journey_strategy']['connections']
+                        if c['from'] == key and tuple(c['at']) == cell and c['to'] != '00:00'}
+            if len(observed) == 1:
+                group, number = (int(part, 16) for part in observed.pop().split(':'))
         name = map_details(group, number)[0] if group and number else "Unknown destination"
         target = {"id": identifier, "kind": "exit", "cell": [x, y],
                   "direction": direction, "map": key, "destination": name,

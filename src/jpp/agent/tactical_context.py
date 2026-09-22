@@ -19,13 +19,18 @@ def pack_context(state, questions, agent):
     ordered = {
         'goal': state.get('goal'),
         'decision_kind': state.get('decision_kind'),
+        'conversation': state.get('conversation'),
+        'progress': journey.get('progress'),
+        'strategy': state.get('strategy'),
+        'navigation_memory': journey.get('navigation_memory'),
         'hm_next': (journey.get('hm_journey') or {}).get('instruction'),
         'map': state.get('map'), 'position': state.get('position'),
         'screen_text': state.get('screen_text'), 'battle': state.get('battle'),
+        'travel': {key: (journey.get('travel') or {}).get(key)
+                   for key in ('destination', 'next_map', 'next_stop') if key in journey['travel']} if journey.get('travel') else None,
         'hm_pending': (journey.get('hm_journey') or {}).get('pending'),
         'next_tasks': [{'task': item.get('label'), 'journey_reward': item.get('journey_reward', 0)}
                        for item in journey.get('candidates', [])[:4]],
-        'strategy': state.get('strategy'),
         'operator_guidance': journey.get('operator_guidance'),
         'operator_notes': journey.get('operator_notes'),
         'context_mode': journey.get('context_mode'),
@@ -57,9 +62,15 @@ def pack_context(state, questions, agent):
                 packed[key] = kept
         omitted.append(key)
     # Never quietly decide without the objective or current interaction screen.
-    for key in ('goal', 'decision_kind', 'map', 'position', 'battle', 'screen_text'):
+    for key in ('goal', 'decision_kind', 'conversation', 'map', 'position', 'battle', 'screen_text'):
         if state.get(key) and packed.get(key) != state[key]:
             raise ValueError(f'Laya context budget cannot retain essential {key}')
+    if journey.get('navigation_memory') and packed.get('navigation_memory') != journey['navigation_memory']:
+        raise ValueError('Laya context budget cannot retain essential navigation_memory')
+    if journey.get('progress') and packed.get('progress') != journey['progress']:
+        raise ValueError('Laya context budget cannot retain essential progress')
+    if state.get('strategy') and packed.get('strategy') != state['strategy']:
+        raise ValueError('Laya context budget cannot retain essential strategy')
     return packed, {'budget': budget, 'retained_tokens': size(packed),
                     'submitted_tokens': size(state), 'omitted_fields': omitted,
                     'retained_fields': list(packed)}

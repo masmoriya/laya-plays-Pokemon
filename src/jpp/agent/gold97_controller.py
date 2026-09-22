@@ -124,7 +124,7 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
     def observe(self, state, entities=(), overworld=True, terrain=None, prompt_visible=None):
         """Also called during manual play and provider outages; never presses keys."""
         self.latest_observed_state = state
-        self.memory.experience.observe(state)
+        self.memory.experience.observe(state, overworld=overworld)
         from .discovery import observe_terrain
         terrain = observe_terrain(self.memory, state, terrain, overworld and not state.in_battle)
         if terrain is not None:
@@ -186,6 +186,7 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
             # A rendered prompt wins over stale sprite/map RAM. Never let
             # journey navigation run behind a dialogue box.
             overworld = False
+        self.live.observe_action(state, overworld=overworld)
         self.planning_frame = frame
         self.last_decision = None
         if overworld or state.in_battle:
@@ -206,8 +207,13 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
             f"awaiting {self.strategy.label}" if self.strategy.future else
             f"awaiting {self._provider_label()}" if self.decision_future else "idle")
         if action:
+            selection_source = (self.strategy.data.get('selection_source', '')
+                                if overworld and not state.in_battle else '')
+            self.live.record_action(state, action, self.action_source, selection_source)
             payload = self.last_decision.model_input if self.last_decision else None
-            self.memory.experience.action(state, action, self.action_source, self.route.now, payload)
+            self.memory.experience.action(state, action, self.action_source, self.route.now, payload,
+                                          selection_source=selection_source,
+                                          plan_id=self.strategy.data.get('plan_id') if selection_source else None)
         return action
 
 

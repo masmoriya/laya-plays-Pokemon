@@ -28,7 +28,9 @@ def draw_inspector(ui, panel):
         _vision(ui, panel)
     elif panel.view == "Steps":
         from .journey_checklist import checklist_lines
-        lines = [line for entry in checklist_lines(panel.progress.get('strategy') or {})
+        strategy = panel.progress.get('strategy') or {}
+        entries = [f"Known: {strategy.get('known', '')}", f"Next: {strategy.get('next', '')}", '']
+        lines = [line for entry in entries + checklist_lines(strategy)
                  for line in ui.wrap(entry, ui.small, BOX.width - 36)]
         _paged_lines(ui, panel, lines, BOX.y + 110, BOX.bottom - 58)
     else:

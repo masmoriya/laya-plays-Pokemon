@@ -63,15 +63,12 @@ class LiveAgentPanel:
         for provider in (tactical_provider, "luna"):
             stats = (usage or {}).get(provider) or {}
             calls = int(stats.get("calls") or 0)
-            if calls <= 0:
-                continue
             tokens = int(stats.get("total_tokens") or
                          (stats.get("input_tokens") or 0) + (stats.get("output_tokens") or 0))
             label = f"{planner if provider == 'luna' else provider.title()} · {calls} call{'s' if calls != 1 else ''}"
-            if tokens:
-                label += f" · {tokens:,} tokens"
+            label += f" · {tokens:,} tokens"
             latency = float(stats.get("latency_ms") or 0)
-            if latency:
+            if latency and calls:
                 label += f" · {latency / calls:.0f} ms"
             ui.text(label, (box.x + 14, top + rendered * 18), ui.tiny,
                     GOOD if provider == tactical_provider else TEXT,
@@ -103,18 +100,17 @@ class LiveAgentPanel:
                 ui.text(line, (box.x + 14, top + 18 + index * 20), font, color,
                         max_width=box.width - 28)
             top += 64
-        recent = [item for item in state.get("decisions", ())[1:]
-                  if item.get("sequence") != decision.get("sequence")][:4]
+        recent = list(state.get('moves') or state.get('decisions') or ())[:4]
         strategy = progress.get("strategy") or {}
         plan = strategy.get("plan") or strategy.get("last_response") or {}
         if strategy.get("enabled"):
             ui.text(f"{strategy.get('planner', 'Luna')} -> Laya" + (" (last reply)" if not strategy.get('plan') and plan else ""), (box.x + 14, top + 4), ui.tiny, ACCENT)
             summary = plan.get("explanation") or strategy.get("error") or strategy.get("status", "Awaiting plan")
-            reply_lines = ui.wrap(summary, ui.small, box.width - 28)
+            reply_lines = ui.wrap(summary, ui.small, box.width - 28)[:2]
             for index, line in enumerate(reply_lines):
                 ui.text(line, (box.x + 14, top + 24 + index * 20), ui.small, TEXT)
             top += 30 + len(reply_lines) * 20
-            recent = recent[:2]
+
         vision = state.get("vision") or {}
         frame = vision.get("frame")
         if frame is not None:
@@ -123,18 +119,26 @@ class LiveAgentPanel:
             ui.button("agent_open:Vision", "Vision " + vision.get("status", ""),
                       pygame.Rect(box.x + 84, top + 12, box.width - 98, 28), MUTED)
             top += 66
-            recent = []
-        if recent:
-            ui.text("Recent", (box.x + 14, top + 4), ui.tiny, MUTED)
-            top += 25
+
+        limit = box.bottom - 181
+        target = strategy.get('accepted_target')
+        if target and top + 38 <= limit:
+            source = strategy.get('selection_source') or 'Route'
+            ui.text(f'{source} · {target}', (box.x + 14, top), ui.tiny, ACCENT,
+                    max_width=box.width - 28)
+            top += 24
+        if recent and top + 49 <= limit:
+            ui.text('Recent moves', (box.x + 14, top), ui.tiny, MUTED)
+            top += 22
             for item in recent:
-                value = item.get("action", "Decision")
-                result = item.get("result")
-                if result and result != "Waiting for result":
-                    value += f" · {result}"
-                ui.text(value, (box.x + 14, top), ui.small, MUTED,
-                        max_width=box.width - 28)
-                top += 24
+                if top + 36 > limit:
+                    break
+                source = item.get('selection_source') or item.get('source') or ''
+                value = item.get('action', 'Action') + (f' · {source}' if source else '')
+                ui.text(value, (box.x + 14, top), ui.tiny, TEXT, max_width=box.width - 28)
+                ui.text(item.get('result') or 'Waiting for result', (box.x + 14, top + 17),
+                        ui.tiny, MUTED, max_width=box.width - 28)
+                top += 38
 
     def _controller(self, progress):
         ui, box = self.ui, self.box

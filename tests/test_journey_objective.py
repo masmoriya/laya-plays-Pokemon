@@ -48,8 +48,16 @@ def test_recorded_bugsy_is_approached_faced_and_challenged(tmp_path, enabled):
         terrain = Gold97CollisionMap((10, 24), 10, 18, bytes(180))
         targets = candidates(state, owner.memory, terrain)
         assert targets[0]['id'] == identifier
+        assert targets[0]['reobserve_interaction']
+        assert data['npcs'][identifier]['name'] == 'Bugsy'
+        assert data['npcs'][identifier]['category'] == 'npc'
+        # Remembered identity survives, but speaking requires reacquisition.
+        owner.strategy.observations.observe(
+            state, (NS(key='object:1', pixel_x=5 * 16, pixel_y=7 * 16),),
+            overworld=True, milestone=10)
+        targets = candidates(state, owner.memory, terrain)
         assert targets[0]['label'] == 'Challenge Bugsy'
-        assert not any(t['kind'] == 'explore' for t in targets)
+        assert targets[0]['kind'] == 'talk'
         strategy = owner.strategy
         assert strategy.options(state, terrain) == {'up': 'Challenge Bugsy'}
         assert strategy.future is None

@@ -29,7 +29,7 @@ def _sidecar(response, status=200):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            payload = json.dumps({"status": "ok", "model": "multilingual", "context_packing_version": 1}).encode()
+            payload = json.dumps({"status": "ok", "model": "multilingual", "context_packing_version": 2}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -188,7 +188,7 @@ def test_factory_selects_laya():
 def test_laya_provider_reads_sidecar_health():
     url, _, server = _sidecar({})
     try:
-        assert LayaProvider(url=url).health() == {"status": "ok", "model": "multilingual", "context_packing_version": 1}
+        assert LayaProvider(url=url).health() == {"status": "ok", "model": "multilingual", "context_packing_version": 2}
     finally:
         server.shutdown()
 
@@ -227,8 +227,8 @@ def test_laya_health_can_start_a_configured_local_sidecar(monkeypatch):
     monkeypatch.setenv("LAYA_STARTUP_TIMEOUT_S", "0.1")
     provider = LayaProvider(url="http://127.0.0.1:9876", timeout=0.01)
     responses = iter([URLError(ConnectionRefusedError("connection refused")),
-                      {"status": "ok", "model": "multilingual", "context_packing_version": 1},
-                      {"status": "ok", "model": "multilingual", "context_packing_version": 1}])
+                      {"status": "ok", "model": "multilingual", "context_packing_version": 2},
+                      {"status": "ok", "model": "multilingual", "context_packing_version": 2}])
 
     def health_request():
         response = next(responses)
@@ -243,7 +243,7 @@ def test_laya_health_can_start_a_configured_local_sidecar(monkeypatch):
         return process
 
     monkeypatch.setattr("jpp.agent.providers.laya_provider.subprocess.Popen", start)
-    assert provider.health() == {"status": "ok", "model": "multilingual", "context_packing_version": 1}
+    assert provider.health() == {"status": "ok", "model": "multilingual", "context_packing_version": 2}
     assert process.command[-2:] == ["--model-path", "/tmp/laya-model"]
     provider.close()
     assert process.terminated
@@ -267,3 +267,8 @@ def test_busy_sidecar_is_not_immediately_retried():
     finally:
         server.shutdown()
     assert len(seen) == 1
+
+
+def test_old_sidecar_cannot_claim_navigation_memory_support():
+    with pytest.raises(RuntimeError, match='Restart'):
+        LayaProvider._check_capabilities({'status': 'ok', 'context_packing_version': 1})

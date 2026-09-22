@@ -3,14 +3,15 @@
 Pinned gold97 revision 976507f9e6e605050384e9ec12e9651988ae7c46:
 constants/event_flags.asm, maps/BoulderMines1F.asm, maps/TeknosCity.asm,
 maps/TeknosAquarium2F.asm, maps/OaksLabEntrance.asm, maps/BrassTower5F.asm,
-and maps/WestportGym.asm. No navigation or completion is inferred from
+maps/WestportGym.asm, and engine/phone/phone_scripts.asm. No navigation or completion is inferred from
 an NPC's name or a model assertion.
 """
 
 _EVENT_FLAGS = 0xDA72
 # The girl script rescues her; the city scene records the takeover warning;
 # Aquarium 2F returns Whitney to her gym after the Rocket encounter.
-_EVENTS = {12: 1977, 13: 277, 14: 278}
+# OakPhoneScript2.disaster sets flag 73 only after the Birdon call finishes.
+_EVENTS = {12: 1977, 13: 277, 14: 278, 16: 73}
 
 
 def story_milestones(memory, verified, map_key=None):

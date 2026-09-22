@@ -1,13 +1,15 @@
 """Candidate selection and planner dispatch, separate from journey lifecycle."""
 from time import monotonic
+from copy import deepcopy
 from .journey_targets import candidates, paths, target_options
 from .journey_knowledge import record
-from .experience import target_key
+from .navigation_policy import collectible, preferred_targets
 
 
 class JourneyPlanning:
-    def reconsider_obstacle(self, state, terrain, durable):
-        if not self.target or self.target.get('category') != 'obstacle':
+    def reconsider_interaction(self, state, terrain, durable):
+        if (not self.target or getattr(state, 'player_moving', False)
+                or collectible(self.target) or self.target.get('retreat_reason')):
             return
         available = candidates(state, self.owner.memory, terrain,
                                excluded=self.excluded | durable,
@@ -16,8 +18,25 @@ class JourneyPlanning:
                                if target['id'] == self.target['id']), 0)
         direct = next((target for target in available if target['kind'] == 'talk'
                        and target.get('category') != 'obstacle'
-                       and target.get('journey_reward', 0) > current_reward), None)
-        if direct and self.required:
+                       and (collectible(target) or self.target.get('category') == 'obstacle'
+                            or target.get('goal_interaction')
+                            or target['cell'] == [state.x, state.y])
+                       and (collectible(target)
+                            or target.get('journey_reward', 0) > current_reward)), None)
+        pickups = preferred_targets([t for t in available if collectible(t)])
+        if pickups and (not direct or pickups[0].get('journey_reward', 0)
+                        >= direct.get('journey_reward', 0)):
+            direct = pickups[0]
+        if direct and collectible(direct):
+            if self.target['kind'] in {'exit', 'explore'}:
+                self.data['resume_target'] = {'goal': self.owner.route.now,
+                                            'target': deepcopy(self.target)}
+            self.invalidate()
+            self.target, self.status = direct, 'ready'
+            self.data['selection_source'] = 'Collectible detour'
+            record(self.owner.memory, 'collectible_detour', direct['id'])
+            return
+        if direct and (self.required or self.shared_control):
             self.invalidate()
             return
         if direct:
@@ -41,7 +60,8 @@ class JourneyPlanning:
         # data and observed sprites as the authority for the retry.
         key = f"{state.map_group:02X}:{state.map_number:02X}"
         position = (state.x, state.y)
-        retry_key = (key, position)
+        from .navigation_memory import evidence_stamp
+        retry_key = (key, position, evidence_stamp(self.owner.memory, self.owner.route.now, key))
         if (not available and terrain is not None
                 and retry_key not in self.rechecked_positions
                 and len(paths(state, self.owner.memory, terrain)) == 1
@@ -60,21 +80,29 @@ class JourneyPlanning:
             # Keep observing and retry transient obstacles without spinning
             # model requests or requiring a manual resume.
             self.recovery_retry_at = monotonic() + 2
-            self.rechecked_positions.discard(retry_key)
             from .object_memory import obstruction_summary
             self.status = "blocked"
-            self.owner._set_provider_event(obstruction_summary(self.data, key))
+            failures = [item for item in self.owner.memory.experience.failures(self.owner.route.now)
+                        if item.get('map') == key]
+            self.data['blocker'] = (f"{failures[-1]['label']}: {failures[-1]['reason']}. "
+                                    "Needs new evidence or Retry." if failures else
+                                    obstruction_summary(self.data, key))
+            self.owner._set_provider_event(self.data['blocker'])
             return {}
         local = [t for t in available if not t.get('landing_return')]
         if local:
             available = local
-        investigations = [t for t in available if t.get('investigation_priority')]
-        if investigations:
-            available = investigations
-        interactions = [t for t in available if t.get('goal_interaction')]
-        if interactions:
-            available = interactions
+        resume = self.data.get('resume_target')
+        if resume and not any(collectible(t) or t.get('retreat_reason') for t in available):
+            self.data.pop('resume_target', None)
+            target = next((t for t in available if t['id'] == resume['target']['id']), None)
+            if target and resume['goal'] == self.owner.route.now and target['map'] == key:
+                self.target, self.status = target, 'ready'
+                self.data['selection_source'] = 'Route continuation'
+                record(self.owner.memory, 'route_resumed', target['id'])
+                return self.options(state, terrain)
         available = self.prioritize_forward_routes(available)
+        available = preferred_targets(available)
         useful = [target for target in available if target.get('journey_reward', 0) > 0]
         if useful:
             available = useful
@@ -92,8 +120,15 @@ class JourneyPlanning:
             available = forward
         self.payload = self.context(state)
         self.payload["candidates"] = available
+        from .navigation_memory import navigation_memory
+        self.payload['navigation_memory'] = navigation_memory(self, state, available)
+        self.payload = deepcopy(self.payload)
         milestone_reward = self.owner.rewards.weights["milestone"]
         top = available[0]
+        if self.shared_control and len(available) == 1:
+            # Laya owns the movement choice; Qwen adds no route decision here.
+            self.status = 'ready'
+            return self.local_options(state, terrain, available)
         top_choice = (("exit", top.get("destination_key"))
                       if top.get("kind") == "exit" and top.get("destination_key")
                       else ("target", top["id"]))
@@ -108,8 +143,9 @@ class JourneyPlanning:
             or ((top.get('goal_destination') or top.get('goal_interaction'))
                 and top.get("journey_reward", 0) >= milestone_reward)
         )
-        if (not self.required and top_priority
+        if (not self.required and not self.shared_control and top_priority
                 and runner_up < top["journey_reward"]):
+            self.data["selection_source"] = "Route continuation"
             self.target = top
             self.status = "ready"
             self.data["plan"] = {"target": self.target["id"],
@@ -124,16 +160,19 @@ class JourneyPlanning:
                 if target.get("source"):
                     record(self.owner.memory, "guide", target["label"], source=target["source"])
             self.status = "planning"
+            self.plan_identity = self.request_identity(state)
             self.plan_started_at = monotonic()
             model_input = getattr(self.provider, "model_input", None)
             if callable(model_input):
-                self.owner.latest_model_input = {
-                    "provider": self.label,
-                    **model_input(self.payload),
-                }
+                try:
+                    self.owner.latest_model_input = {'provider': self.label, **model_input(self.payload)}
+                except Exception as exc:
+                    self.provider_failed(f'{self.label} context unavailable: {str(exc)[:120]}')
+                    return self.local_options(state, terrain, available) if self.shared_control else {}
                 self.owner._set_provider_event(
                     f"{self.label} input · strategy · {len(available)} candidates"
                 )
+            self.submitted_input = self.owner.latest_model_input
             visual = getattr(self.provider, "plan_visual", None)
             frame = getattr(self.owner, "planning_frame", None)
             self.plan_has_image = callable(visual) and frame is not None
@@ -148,20 +187,11 @@ class JourneyPlanning:
                 self.future = self.owner.executor.submit(visual, self.payload, frame, recent_frames)
             else:
                 self.future = self.owner.executor.submit(self.provider.plan, self.payload)
-            self.owner.memory.experience.record('planner_request', payload=self.payload,
-                                                 model=getattr(self.provider, 'model', None))
-            return {}
-        # Laya receives all reachable tasks; it selects the task and its next legal
-        # control together. No model-produced plan remains active in this mode.
-        options = {}
-        self.local_targets = {}
-        for target in available:
-            for action, label in target_options(target, state, self.owner.memory, terrain).items():
-                if action == "a":
-                    continue  # First commit the task and establish facing.
-                options.setdefault(action, label)
-                self.local_targets.setdefault(action, target)
-        return options
+            self.plan_id = self.owner.memory.experience.record('planner_request', payload=self.payload,
+                                                 model=getattr(self.provider, 'model', None),
+                                                 context=(self.submitted_input or {}).get('context'))
+            return self.local_options(state, terrain, available) if self.shared_control else {}
+        return self.local_options(state, terrain, available)
 
     def prioritize_forward_routes(self, available):
         """Make a just-used doorway less valuable while alternatives exist."""
@@ -171,7 +201,8 @@ class JourneyPlanning:
         milestone = self.owner.rewards.weights["milestone"]
         prioritized = []
         for target in available:
-            if (target.get('prerequisite') or target.get('goal_route') or target.get("kind") != "exit"
+            if (((target.get('prerequisite') or target.get('goal_route')) and not target.get('recent_return'))
+                    or target.get("kind") != "exit"
                     or target.get("destination_key") != source):
                 prioritized.append(target)
                 continue
@@ -184,17 +215,8 @@ class JourneyPlanning:
 
 
     def recovery_candidates(self, state, terrain):
-        """Reconsider observed leads after alternatives are exhausted."""
+        """Recover reachable leads without reopening unchanged failures."""
         available = candidates(state, self.owner.memory, terrain,
                                reward_weights=self.owner.rewards.weights)
-        failures = self.owner.memory.experience.failures(self.owner.route.now)
-        attempted = {item['target_key']: item['timestamp'] for item in failures}
-        if available:
-            # Retry the oldest failed approach first; retain Journey ranking
-            # among equally fresh leads and never erase durable experience.
-            oldest = min(attempted.get(target_key(t), 0) for t in available)
-            available = [t for t in available
-                         if attempted.get(target_key(t), 0) == oldest]
-            record(self.owner.memory, "route_recheck", available[0]["label"])
-            return available
-        return []
+        from .navigation_memory import allowed_targets
+        return allowed_targets(self.owner.memory, self.owner.route.now, available)

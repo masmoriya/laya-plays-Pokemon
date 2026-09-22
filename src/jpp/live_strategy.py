@@ -9,14 +9,20 @@ def draw_strategy(ui, box, top):
     data = getattr(ui, "strategy_summary", None)
     if not data:
         return
-    ui.button("strategy_details", "Details" if not ui.strategy_details else "Less",
+    ui.button("agent_open:Steps", "Details",
               pygame.Rect(box.right - 76, top, 62, 22))
     for label, value in (("Known", data["known"]), ("Next", data["next"])):
         ui.text(label, (box.x + 14, top), ui.tiny, MUTED)
-        for line in ui.wrap(value, ui.small, box.width - 100)[:2]:
-            ui.text(line, (box.x + 60, top + 24), ui.small, TEXT)
-            top += 18
-        top += 28
+        top += 23
+        lines = ui.wrap(value, ui.small, box.width - 28)
+        limit = max(1, min(3, (box.bottom - 112 - top) // ui.small.get_linesize()))
+        shown = lines[:limit]
+        if len(lines) > limit:
+            shown[-1] = shown[-1].rstrip() + '…'
+        for line in shown:
+            ui.text(line, (box.x + 14, top), ui.small, TEXT, max_width=box.width - 28)
+            top += ui.small.get_linesize()
+        top += 10
     rewards = data.get('rewards', {})
     ui.text(f"{rewards.get('points', 0)} points · {data.get('intent', 'Continue journey')}",
             (box.x + 14, top), ui.small, TEXT, max_width=box.width - 28)

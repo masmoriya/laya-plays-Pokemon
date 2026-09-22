@@ -32,3 +32,5 @@ packages = ["src/jpp"]
 "config/jev_animations.json" = "jpp/resources/jev_animations.json"
 "config/jev_sprites.json" = "jpp/resources/jev_sprites.json"
 "assets/jev/jev-spritesheet.png" = "jpp/resources/assets/jev/jev-spritesheet.png"
+
+"config/gold97_travel.json" = "jpp/resources/gold97_travel.json"

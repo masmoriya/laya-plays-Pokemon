@@ -1,15 +1,16 @@
 """Event-driven journey planning shared by live and headless controllers."""
 
-from time import monotonic, time
+from time import monotonic
 from .journey_context import strategy_context, strategy_summary
 from .journey_knowledge import JourneyKnowledge, knowledge, record
-from .journey_strategy_provider import JourneyStrategyProvider, validate_plan
+from .journey_strategy_provider import JourneyStrategyProvider
 from .journey_targets import target_options
 from .journey_planning import JourneyPlanning
 from .journey_observation import JourneyObservation
+from .journey_async import JourneyAsync
 
 
-class JourneyStrategy(JourneyObservation, JourneyPlanning):
+class JourneyStrategy(JourneyObservation, JourneyPlanning, JourneyAsync):
     def __init__(self, controller, provider=None, enabled=True):
         from .field_actions import FieldAction
         self.field_action = FieldAction()
@@ -49,7 +50,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
 
     @property
     def required(self):
-        return self.enabled and getattr(self.provider, "required", False)
+        return self.enabled and getattr(self.provider, 'required', False) and not self.shared_control
 
     @property
     def data(self):
@@ -75,17 +76,26 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
         suffix = '; movement held; retrying planner' if self.required else '; continuing with Laya'
         self.owner._set_provider_event(reason + suffix)
 
-    def invalidate(self):
+    def invalidate(self, *, preserve_pending=False):
         self.recovery_retry_at = 0
-        self.generation += 1
-        if self.future:
+        preserve_pending = preserve_pending and self.shared_control and self.future is not None
+        if not preserve_pending:
+            self.generation += 1
+        if self.future and not preserve_pending:
+            self.owner.memory.experience.record('planner_rejected',
+                plan_id=getattr(self, 'plan_id', None), reason='Navigation state invalidated')
+            if getattr(self, 'plan_has_image', False):
+                self.owner.live.vision_finished(error='Navigation state changed; reply retired')
             if not self.future.cancel():
                 self.retired.append(("plan", self.future))
-        self.future = None
+        if not preserve_pending:
+            self.future = None
         self.target = None
         self.warp_wait = 0
         self.facing = None
         self.data["plan"] = None
+        self.data["plan_id"] = None
+        self.data["selection_source"] = None
         if self.owner.decision_future:
             self.owner.decision_future.cancel()
         self.owner.decision_future = None
@@ -96,7 +106,8 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
         self.owner.cooldown = 0
         self.owner.navigation_target = None
         self.owner.opening_goal = None
-        self.payload = None
+        if not preserve_pending:
+            self.payload = None
         self.owner.memory.save()
 
     def toggle(self):
@@ -118,7 +129,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
             from .navigation_trace import record_target
             record_target(self.owner.memory, target)
             npc = self.data['npcs'].get(target['id'])
-            if npc and npc.get('category') in {'item', 'obstacle'}:
+            if npc and npc.get('category') in {'item', 'obstacle', 'resource'}:
                 from .object_memory import attempt, evidence_key
                 attempt(npc, evidence_key(self.observations.state, npc, self.owner.memory), 'approach')
             self.excluded.add(target["id"])
@@ -134,19 +145,15 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
     def options(self, state, terrain):
         self.position = [state.x, state.y]
         failures = self.owner.memory.experience.failures(self.owner.route.now)
-        transient = {"Target is no longer reachable", "Repeated movement without new evidence",
-                     "Repeated map cycle without new dialogue or discoveries"}
-        expired = [item for item in failures if item["reason"] in transient
-                   and time() - item.get("timestamp", 0) >= 60]
-        self.excluded.difference_update(item["target"] for item in expired)
-        durable = {key for item in failures if item not in expired
-                   for key in (item['target'], item['target_key'])}
+        self.excluded.intersection_update(item['target'] for item in failures)
+        durable = {key for item in failures for key in (item['target'], item['target_key'])}
         if self.owner.movement_history.looping:
             self.failed("Repeated movement without new evidence")
         if self.owner.paused:
             return {}
         if not self.observations.pending:
-            self.reconsider_obstacle(state, terrain, durable)
+            self.reconsider_interaction(state, terrain, durable)
+        self.poll_plan(state, terrain)
         if self.target:
             result = target_options(self.target, state, self.owner.memory, terrain,
                                     self.observations.pending)
@@ -174,12 +181,18 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
                         from .field_actions import experiments
                         if experiments(state, npc, self.owner.memory):
                             return {'start': 'Inspect a party field move for this obstacle'}
-                    return {"a": (self.target["label"] if npc.get("category") in {"item", "obstacle"}
+                    return {"a": (self.target["label"] if npc.get("category") in {"item", "obstacle", "resource"}
                                   else "Talk to the sprite")}
                 self.interaction_arrival = None
                 self.facing = None
                 return result
             if self.observations.pending:
+                return {}
+            if (self.target.get('reobserve_interaction')
+                    and self.position == self.target['cell']):
+                # Observation owns the bounded settling/reacquisition window.
+                self.owner.held_action = None
+                self.owner.last = None
                 return {}
             if (self.target["kind"] == "exit" and not self.target.get("direction")
                     and self.position == self.target["cell"]):
@@ -195,52 +208,18 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
             if self.owner.paused:
                 return {}
         if self.future:
-            if not self.future.done():
-                deadline = getattr(self.provider, 'timeout', 60)
-                if monotonic() - self.plan_started_at < deadline:
-                    return {}
-                future, self.future = self.future, None
-                if not future.cancel():
-                    self.retired.append(("plan", future))
-                self.owner.memory.experience.record('planner_timeout', deadline=deadline)
-                self.provider_failed(f"{self.label} planning exceeded {deadline:g} seconds")
-                return self.options(state, terrain)
-            future, self.future = self.future, None
-            try:
-                plan, usage = future.result()
-                plan = validate_plan(plan, self.payload)
-                self.owner.usage.record("luna", **usage)
-                self.owner.live.model_call(
-                    "luna", usage, self.owner.latest_model_input, phase="strategy"
-                )
-            except Exception as exc:
-                detail = str(exc).strip().replace("\n", " ")[:120]
-                suffix = f": {detail}" if detail else ""
-                self.provider_failed(
-                    f"{self.label} strategy unavailable: {type(exc).__name__}{suffix}")
-                self.owner.live.model_call(
-                    "luna", status="error", error=detail, phase="strategy"
-                )
-                return self.options(state, terrain)
-            self.target = next(c for c in self.payload["candidates"] if c["id"] == plan["target"])
-            self.data["plan"] = plan
-            self.accepted_dialogue_key = getattr(self, "plan_dialogue_key", None)
-            self.data["last_response"] = {**plan, "goal": self.payload.get("goal")}
-            self.owner.memory.experience.record('planner_accepted', plan=plan, usage=usage)
-            self.status = "ready"
-            self.last_error = ""
-            if getattr(self, "plan_has_image", False):
-                self.owner.live.vision_finished({"mode": "planning", "screen_text": [],
-                                                "uncertainty": plan["explanation"]})
-            self.provider_failures = 0
-            record(self.owner.memory, "plan", plan["explanation"])
-            self.owner._set_provider_event(f"{self.label} -> Laya: {plan['explanation']}")
-            return self.options(state, terrain)
+            return self.local_options(state, terrain) if self.shared_control else {}
         return self.plan_next(state, terrain, durable)
 
     def chosen(self, action):
-        if not self.target and not self.use_luna:
+        if not self.target and (self.shared_control or not self.use_luna):
             self.target = getattr(self, "local_targets", {}).get(action)
+            if self.target:
+                decision = self.owner.last_decision
+                self.data['selection_source'] = ('Laya' if decision and decision.request_made
+                                                  else 'Route continuation')
+                self.data['plan_review'] = 'Local eligible investigation'
+                self.data['plan'] = None
         if not self.target:
             return
         from .exploration_cycles import evidence

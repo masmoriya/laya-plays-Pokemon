@@ -7,7 +7,7 @@ from jpp.gold97_collision import Gold97CollisionMap
 from jpp.route_progress import RouteProgress
 
 
-def route103(controller):
+def route103(controller, milestone=11):
     s = state()
     s.map_group, s.map_number = 8, 4
     s.area_name = "Route 103"
@@ -15,11 +15,11 @@ def route103(controller):
     s.x, s.y = 13, 49
     s.map_exits = ((12, 49, "", 9, 8), (13, 49, "", 9, 8),
                    (11, 0, "up", 8, 5))
-    controller.route = RouteProgress(set(range(1, 11)))
+    controller.route = RouteProgress(set(range(1, milestone)))
     controller.memory.world["route"] = controller.route.to_dict()
     controller.strategy.observe(s, (), True)
     data = controller.strategy.data
-    data["route_maps"]["11"] = ["09:08", "08:04"]
+    data["route_maps"][str(milestone)] = ["09:08", "08:04"]
     data["connections"] = [
         {"from": "08:04", "at": [13, 49], "to": "09:08",
          "arrival": [5, 1], "direction": direction}
@@ -38,7 +38,7 @@ def stale_exit():
 
 
 def test_blocked_exit_replans_north_without_repeating_right(controller):
-    s, terrain = route103(controller)
+    s, terrain = route103(controller, milestone=17)
     strategy = controller.strategy
     strategy.target = stale_exit()
     assert target_options(strategy.target, s, controller.memory, terrain) == {}
@@ -48,18 +48,17 @@ def test_blocked_exit_replans_north_without_repeating_right(controller):
     assert strategy.target["cell"][1] == 0
     assert strategy.future is None
     assert not controller.paused
-    assert controller.memory.experience.failures(11)[0]["target"] == stale_exit()["id"]
-    assert controller.route.now == 11  # Movement plans do not complete milestones.
+    assert controller.memory.experience.failures(17)[0]["target"] == stale_exit()["id"]
+    assert controller.route.now == 17  # Movement plans do not complete milestones.
 
 
 def test_geometry_supersedes_conflicting_memories_for_the_same_exit(controller):
-    s, terrain = route103(controller)
+    s, terrain = route103(controller, milestone=17)
     tasks = candidates(s, controller.memory, terrain)
     assert tasks[0]["destination_key"] == "08:05"
     gates = [task for task in tasks if task.get("destination_key") == "09:08"]
-    assert len(gates) == 1
-    assert gates[0]["id"].startswith("geometry:")
-    assert gates[0]["direction"] == ""
+    assert {tuple(t["cell"]) for t in gates} == {(12, 49), (13, 49)}
+    assert all(t["id"].startswith("geometry:") and t["direction"] == "" for t in gates)
 
 
 def test_failed_boundary_direction_is_excluded_before_planning(controller):

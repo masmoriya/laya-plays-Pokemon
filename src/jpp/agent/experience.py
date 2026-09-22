@@ -50,23 +50,55 @@ class Experience:
 
     def fail(self, goal, target, reason):
         scope = prerequisites(self.memory, goal)
+        from .navigation_memory import evidence_stamp
         item = {'target': target['id'], 'map': target.get('map', ''),
                 'target_key': target_key(target),
+                'evidence_stamp': evidence_stamp(self.memory, goal, target.get('map')),
                 'goal': goal, 'reason': reason, 'label': target.get('label', target['id']),
-                'retry_when': 'Goal/dialogue evidence changes, or manual Retry',
+                'retry_when': 'Relevant objective evidence changes, or manual Retry',
                 'timestamp': time.time()}
+        if target.get('reobserve_interaction'):
+            item['reobserve_version'] = 1
+        attempt_id = target_key(target) if target.get('reobserve_interaction') else target['id']
         self.db.execute('INSERT OR REPLACE INTO agent_attempts VALUES(?,?,?,?)',
-                        (self.run_id, scope, target['id'], json.dumps(item)))
+                        (self.run_id, scope, attempt_id, json.dumps(item)))
         self.record('attempt_failed', **item)
 
     def failures(self, goal):
-        rows = self.db.execute('SELECT payload FROM agent_attempts WHERE run_id=? AND scope=?',
-                               (self.run_id, prerequisites(self.memory, goal)))
-        return [json.loads(row[0]) for row in rows]
+        from .navigation_memory import evidence_stamp
+        rows = self.db.execute('SELECT scope,payload FROM agent_attempts WHERE run_id=?',
+                               (self.run_id,))
+        result = []
+        for scope, payload in rows:
+            item = json.loads(payload)
+            if item.get('goal') != goal:
+                continue
+            if (item.get('reobserve_version') != 1
+                    and item['reason'].startswith('Last-seen person')):
+                continue  # Legacy arrivals failed before sprite/camera settling.
+            if item['reason'].startswith('Last-seen person'):
+                npc = self.memory.world.get('journey_strategy', {}).get('npcs', {}).get(item['target'], {})
+                if npc.get('visible'):
+                    continue  # Seeing the actual person makes this lead actionable again.
+            stamp = item.get('evidence_stamp')
+            if stamp is not None:
+                if stamp != evidence_stamp(self.memory, goal, item.get('map')):
+                    continue
+            elif scope != prerequisites(self.memory, goal):
+                continue  # Legacy checkpoint evidence remains scoped as recorded.
+            result.append(item)
+        return sorted(result, key=lambda item: item.get('timestamp', 0))
 
     def retry(self, goal):
-        self.db.execute('DELETE FROM agent_attempts WHERE run_id=? AND scope=?',
-                        (self.run_id, prerequisites(self.memory, goal)))
+        rows = self.db.execute('SELECT scope,target,payload FROM agent_attempts WHERE run_id=?',
+                               (self.run_id,)).fetchall()
+        for scope, target, payload in rows:
+            if json.loads(payload).get('goal') == goal:
+                self.db.execute('DELETE FROM agent_attempts WHERE run_id=? AND scope=? AND target=?',
+                                (self.run_id, scope, target))
+        for key in ('navigation_trace', 'transition_budget'):
+            self.memory.world.pop(key, None)
+        self.memory.save()
         self.record('manual_retry', goal=goal)
 
     def recent(self, limit=100):
@@ -132,22 +164,28 @@ class Experience:
         ).fetchone()
         return bool(row and row[0])
 
-    def observe(self, state):
+    def observe(self, state, *, overworld=False):
         current = observation(state)
-        if self.pending and current != self.pending[1]:
+        before = self.pending[1] if self.pending else None
+        if overworld and not getattr(state, 'in_battle', False):
+            current['screen'] = []
+            if before is not None:
+                before = {**before, 'screen': []}
+        if self.pending and current != before:
             self.record('outcome', decision_id=self.pending[0], before=self.pending[1],
-                        after=current, outcome=describe_change(self.pending[1], current))
+                        after=current, outcome=describe_change(before, current))
             self.pending = None
         return current
 
-    def action(self, state, action, source, goal, model_input=None):
+    def action(self, state, action, source, goal, model_input=None, *, selection_source=None, plan_id=None):
         current = observation(state)
         if self.pending:
             if self.pending[2] == action:
                 return  # Held controls belong to the same attempt.
             self.interrupt('Superseded before an observed state change')
         identifier = self.record('action', action=action, source=source, goal=goal,
-                                 before=current, model_input=model_input)
+                                 before=current, model_input=model_input,
+                                 selection_source=selection_source, plan_id=plan_id)
         self.pending = identifier, current, action
 
     def interrupt(self, reason):

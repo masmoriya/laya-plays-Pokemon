@@ -1,12 +1,9 @@
 """Reachable investigations from observed sprites, terrain, and transitions."""
 
-import heapq
-from itertools import count
-import json
-from functools import lru_cache
-
 from ..route_progress import MAIN
 from .gold97_navigation import STEPS
+from .navigation_paths import paths
+from .navigation_policy import prefer_discovery
 from .gold97_rewards import DEFAULT_WEIGHTS
 from .gold97_services import CENTER_RETREAT_EXITS
 from .journey_guidance import rank_candidates
@@ -19,50 +16,11 @@ from .object_memory import classify, eligible, evidence_key
 from .field_actions import experiments, strength_push
 
 
-def paths(state, memory, terrain, *, prefer_new=True):
-    """One observed-path search, preferring edges not repeatedly retraced."""
-    key = f"{state.map_group:02X}:{state.map_number:02X}"
-    memory.expire_blocked(key)
-    origin = (state.x, state.y)
-    blocked = frozenset((tuple(p), d) for p, d in memory.map(key)["blocked"])
-    objects = frozenset(tuple(n["cell"]) for n in memory.world.get("journey_strategy", {}).get(
-        "npcs", {}).values() if n["map"] == key and n.get("outcome") != "collected"
-        and (n.get("visible", False) or n.get("category") in {"item", "obstacle"}))
-    from .navigation_trace import edge_costs
-    from .discovery import known_exits
-    portals = frozenset(tuple(e[:2]) for e in known_exits(state, terrain))
-    return _paths(origin, state.map_width, state.map_height, terrain, blocked, objects,
-                  edge_costs(memory, key) if prefer_new else (), portals)
-
-
-@lru_cache(maxsize=32)
-def _paths(origin, width, height, terrain, blocked, objects, costs=(), portals=frozenset()):
-    prices = {(tuple(p), d): count for stamp, count in costs for p, d in [json.loads(stamp)]}
-    found, distances = {origin: None}, {origin: 0}
-    serial = count()
-    queue = [(0, next(serial), origin)]
-    while queue:
-        cost, _, point = heapq.heappop(queue)
-        if cost != distances[point] or (point in portals and point != origin):
-            continue
-        for direction, (dx, dy) in STEPS.items():
-            target = point[0] + dx, point[1] + dy
-            if (target in objects or (point, direction) in blocked
-                    or not (0 <= target[0] < width and 0 <= target[1] < height)
-                    or terrain is None or not terrain.allows(target, direction)):
-                continue
-            price = cost + 1 + min(6, prices.get((point, direction), 0))
-            if price < distances.get(target, float('inf')):
-                distances[target] = price
-                found[target] = found[point] or direction
-                heapq.heappush(queue, (price, next(serial), target))
-    return found
-
 
 def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
     key = f"{state.map_group:02X}:{state.map_number:02X}"
     data = memory.world["journey_strategy"]
-    reachable = paths(state, memory, terrain)
+    reachable = paths(state, memory, terrain, prefer_new=False)
     result = []
     milestone = next((i for i in range(1, 128) if i not in
                       memory.world.get("route", {}).get("completed", [])), None)
@@ -84,35 +42,49 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
                 and tuple(npc['cell']) in getattr(terrain, 'visible_objects', ())):
             continue  # The last-known location is already in view and empty.
         speaker = objective_speaker(npc, goal)
+        if speaker:
+            # The adapter matched an observed self-introduction, not a sprite
+            # index or somebody else mentioning this objective's participant.
+            npc.update(category='npc', name=speaker, role='objective participant')
         ferry = ferry_speaker(state, milestone, npc)
         from .mine_guidance import rescue_speaker
         rescue = rescue_speaker(state, milestone, npc)
         speaker = speaker or ('missing girl' if rescue else 'Teknos ferry sailor' if ferry else None)
-        if (npc["map"] != key or (npc["id"] in excluded and npc.get("category") not in {"item", "obstacle"})
+        if (npc["map"] != key
                 or (not speaker and (npc["status"] != "pending"
                                      or (not npc.get("visible", True) and not npc.get("observed")
-                                      and npc.get("category") not in {"item", "obstacle"})))):
+                                      and npc.get("category") not in {"item", "obstacle", "resource"})))):
             continue
-        approaches = sorted(STEPS.items(), key=lambda entry: (
-            abs(npc["cell"][0] - entry[1][0] - state.x)
-            + abs(npc["cell"][1] - entry[1][1] - state.y)))
+        approaches = sorted(STEPS.items(), key=lambda entry: reachable.distances.get(
+            (npc["cell"][0] - entry[1][0], npc["cell"][1] - entry[1][1]), float('inf')))
         for direction, (dx, dy) in approaches:
             cell = npc["cell"][0] - dx, npc["cell"][1] - dy
             if cell in reachable:
                 npc["reachability"] = "reachable"
-                reobserve = not npc.get('visible', True) and npc.get('category') not in {'item', 'obstacle'}
-                result.append({"id": npc["id"], "kind": "explore" if reobserve else "talk", "cell": list(cell),
+                reobserve = not npc.get('visible', True) and npc.get('category') not in {'item', 'obstacle', 'resource'}
+                candidate = {"id": npc["id"], "kind": "explore" if reobserve else "talk", "cell": list(cell),
                                "direction": direction,
                                "category": npc.get('category'), "outcome": npc.get('outcome'),
                                "label": ('Recheck the last-seen object' if reobserve else
                                          'Collect the observed item' if npc.get('category') == 'item' else
+                                         'Harvest the observed resource' if npc.get('category') == 'resource' else
                                          'Investigate the blocking object' if npc.get('category') == 'obstacle' else
                                          'Ask the sailor for the Teknos City ferry' if ferry else
                                          f"Challenge {speaker}" if speaker else "Talk to an unvisited sprite"),
                                "goal_interaction": bool(speaker), "ferry_interaction": ferry,
                                "rescue_interaction": rescue,
                                "reobserve_interaction": reobserve,
-                               "completion": "Dialogue observed and closed", "map": key})
+                               "completion": ("Pickup confirmed or resource verified empty"
+                                              if npc.get('category') == 'resource' else
+                                              "Pickup confirmed" if npc.get('category') == 'item' else
+                                              "Dialogue observed and closed"), "map": key}
+                from .navigation_memory import allowed_targets
+                from .navigation_trace import unexhausted
+                if (target_key(candidate) in excluded
+                        or not allowed_targets(memory, milestone, [candidate])
+                        or not unexhausted(memory, [candidate])):
+                    continue  # A failed viewpoint does not rule out the person.
+                result.append(candidate)
                 break
         else:
             npc["reachability"] = "unreachable from the current position"
@@ -128,19 +100,20 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
                            "label": "Leave the completed tower and investigate Pagota",
                            "completion": "Observe a map transition"})
     visited = {tuple(p) for p in memory.map(key)["visited"]}
-    portals = {tuple(e[:2]) for e in getattr(terrain, "exits", ())}
+    from .discovery import known_exits
+    portals = {tuple(e[:2]) for e in known_exits(state, terrain)}
     unexplored = [cell for cell in frontier_cells(reachable, terrain, visited) if cell not in portals and
                                    f"explore:{key}:{cell}" not in excluded]
     from .navigation_trace import unexhausted
     unexplored = [cell for cell in unexplored if unexhausted(memory, [
         {"map": key, "kind": "explore", "cell": list(cell), "direction": ""}])]
-    # Investigate a small area per plan, rather than requesting Luna every tile.
-    # New NPCs and dialogue still interrupt immediately through observations.
-    distance = lambda cell: abs(cell[0] - state.x) + abs(cell[1] - state.y)
-    farther = [cell for cell in unexplored if 6 <= distance(cell) <= 10]
+    distance = lambda cell: reachable.distances[cell]
+    farther = {cell for cell in unexplored if 6 <= distance(cell) <= 10}
     selected = {}
-    for cell in sorted(farther or unexplored, key=distance, reverse=True):
-        selected.setdefault(reachable[cell], cell)
+    for cell in sorted(unexplored, key=lambda c: (c not in farther, -distance(c), c)):
+        dx, dy = cell[0] - state.x, cell[1] - state.y
+        sector = ((dx > 0) - (dx < 0), (dy > 0) - (dy < 0))
+        selected.setdefault(sector, cell)
     for cell in selected.values():
         identifier = f"explore:{key}:{cell}"
         if cell != (state.x, state.y) and identifier not in excluded:
@@ -162,6 +135,12 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
                            "label": "Return toward Pagota via the tower exit",
                            "source": "Gold 97 v6.1c cartridge map events: gold97_services.py",
                            "completion": "Observe a map transition"})
+    from .travel_atlas import atlas_exits
+    mapped = [t for t in atlas_exits(state, reachable, excluded, terrain) if not exit_blocked(t, memory)]
+    mapped_cells = {tuple(t['cell']) for t in mapped}
+    result = [t for t in result if not (t['kind'] == 'exit' and
+              t.get('destination_key') == '00:00' and tuple(t['cell']) in mapped_cells)]
+    result.extend(mapped)
     weights = reward_weights or DEFAULT_WEIGHTS
     result = [item for item in result if target_key(item) not in excluded
               or item.get("category") in {"item", "obstacle"}]
@@ -187,34 +166,36 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
     ranked = rank_interactions(ranked, weights['milestone'])
     from .journey_hms import rank_hm_targets
     ranked = rank_hm_targets(ranked, state, milestone, weights['milestone'], memory)
+    from .hm_preparation import rank_preparation
+    ranked = rank_preparation(ranked, state, milestone, weights['milestone'], memory)
     from .mine_guidance import rank_rescue
     ranked = rank_rescue(ranked, weights['milestone'])
-    ranked.sort(key=lambda t: -t.get('journey_reward', 0))
+    from .travel_atlas import rank_travel, rank_travel_frontier
+    from .passage_navigation import mark_entry_returns
+    ranked = mark_entry_returns(ranked, memory, state, milestone)
+    ranked = rank_travel(ranked, state, milestone, weights['milestone'], memory)
+    if getattr(terrain, 'seen', None) is not None:
+        ranked = rank_travel_frontier(ranked, state, milestone, weights['milestone'], memory)
     from .navigation_trace import unexhausted
-    return unexhausted(memory, filter_cycles(prefer_discovery(ranked, memory), memory))
+    from .navigation_memory import allowed_targets, target_evidence
+    ranked = allowed_targets(memory, milestone, ranked)
+    for target in ranked:
+        target['destination_evidence'] = target_evidence(target, memory)
+    ranked = unexhausted(memory, filter_cycles(prefer_discovery(ranked, memory), memory))
+    for target in ranked:
+        target['path_steps'] = reachable.distances.get(tuple(target['cell']), 0)
+    return sorted(ranked, key=lambda t: (-t.get('journey_reward', 0),
+                                        not t.get('unvisited_destination', False),
+                                        t['path_steps']))
 
-
-def prefer_discovery(targets, memory):
-    """Suppress incidental returns when a reachable new destination exists."""
-    known = {key for key, area in memory.world['maps'].items() if area.get('visited')}
-    for connection in memory.world['journey_strategy']['connections']:
-        known.update((connection['from'], connection['to']))
-    for target in targets:
-        if target.get('destination_key'):
-            target['unvisited_destination'] = target['destination_key'] not in known
-    novel = [target for target in targets if target.get('unvisited_destination')]
-    if not novel:
-        return targets
-    # Preserve Journey reward order; novelty only breaks equal-reward ties.
-    novel_ids = {target['id'] for target in novel}
-    return sorted(targets, key=lambda target: (
-        -target.get('journey_reward', 0), target['id'] not in novel_ids))
 
 
 def target_options(target, state, memory, terrain, pending=None):
     origin = state.x, state.y
     if target["map"] != f"{state.map_group:02X}:{state.map_number:02X}":
         return {}
+    from .interaction_refresh import refresh_interaction
+    refresh_interaction(target, memory.world['journey_strategy']['npcs'])
     if target["kind"] == "exit" and exit_blocked(target, memory):
         return {}
     if target["kind"] == "talk":
@@ -242,7 +223,7 @@ def target_options(target, state, memory, terrain, pending=None):
     if target["kind"] == "talk" and destination not in reachable and npc:
         # A walking NPC can make the originally chosen side inaccessible.
         # Re-approach the same observed speaker from another reachable side.
-        approaches = [(abs(npc["cell"][0]-dx-origin[0]) + abs(npc["cell"][1]-dy-origin[1]),
+        approaches = [(reachable.distances[(npc["cell"][0]-dx, npc["cell"][1]-dy)],
                        d, (npc["cell"][0]-dx, npc["cell"][1]-dy))
                       for d, (dx,dy) in STEPS.items()
                       if (npc["cell"][0]-dx, npc["cell"][1]-dy) in reachable]

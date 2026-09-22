@@ -1,5 +1,4 @@
 """Capture evidence before advancing dialogue, regardless of emulation speed."""
-from .journey_evidence import dialogue_text
 
 
 def before_advance(owner, state, frame):
@@ -7,7 +6,7 @@ def before_advance(owner, state, frame):
     lines = getattr(state, 'screen_lines', ())
     text = ' '.join(line.strip() for line in (lines[12:] if len(lines) >= 18 else lines)
                     if line.strip())[:1500]
-    readable = dialogue_text(text)
+    readable = observation.readable(text)
     if not readable and frame is None:
         return
     key = f'{state.map_group:02X}:{state.map_number:02X}'

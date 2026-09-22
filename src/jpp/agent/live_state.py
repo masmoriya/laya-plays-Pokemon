@@ -30,8 +30,18 @@ class LiveAgentState:
             "result": "",
         }
         self.decisions = deque(maxlen=8)
-        previous = [item for item in memory.experience.recent(200)
-                    if item.get("kind") == "model_call"]
+        self.moves = deque(maxlen=8)
+        self.pending_move = None
+        history = memory.experience.recent(200)
+        outcomes = {item['decision_id']: item.get('outcome', '') for item in reversed(history)
+                    if item.get('kind') == 'outcome'}
+        actions = [item for item in history if item.get('kind') == 'action'][:8]
+        for item in reversed(actions):
+            self.moves.append({'action': display_action(item['action']),
+                               'source': item.get('source', ''),
+                               'selection_source': item.get('selection_source', ''),
+                               'result': outcomes.get(item['id']) or 'No recorded outcome'})
+        previous = [item for item in history if item.get('kind') == 'model_call']
         self.calls = deque(reversed(previous[:40]), maxlen=40)
         self.inputs = {}
         self.vision = None
@@ -49,11 +59,43 @@ class LiveAgentState:
         self.decisions.append(dict(self.current))
 
     def result(self, value):
-        if not value or not self.current.get("sequence"):
+        if not value:
+            return
+        if self.pending_move and str(value).startswith('Blocked'):
+            self.moves[-1]['result'] = str(value)
+            self.pending_move = None
+        if not self.current.get('sequence'):
             return
         self.current["result"] = str(value)
         if self.decisions and self.decisions[-1]["sequence"] == self.current["sequence"]:
             self.decisions[-1] = dict(self.current)
+
+    def record_action(self, state, action, source, selection_source=''):
+        from .experience import observation
+        before = observation(state)
+        if self.pending_move == (action, before):
+            return
+        if self.pending_move:
+            self.moves[-1]['result'] = 'No observed change before next action'
+        self.moves.append({'action': display_action(action), 'source': source,
+                           'selection_source': selection_source,
+                           'result': 'Waiting for result'})
+        self.pending_move = (action, before)
+
+    def observe_action(self, state, *, overworld=False):
+        from .experience import observation, describe_change
+        if not self.pending_move:
+            return
+        after = observation(state)
+        before = self.pending_move[1]
+        if overworld and not getattr(state, 'in_battle', False):
+            # Background tile IDs share the font's numeric range. Scrolling
+            # scenery is neither readable text nor an action outcome.
+            before = {**before, 'screen': []}
+            after = {**after, 'screen': []}
+        if before != after:
+            self.moves[-1]['result'] = describe_change(before, after)
+            self.pending_move = None
 
     def model_call(self, provider, usage=None, model_input=None, *, confidence=None,
                    status="completed", error="", phase="tactical", fallback=""):
@@ -73,6 +115,9 @@ class LiveAgentState:
             "confidence": (float(confidence) if isinstance(confidence, (int, float))
                            and not isinstance(confidence, bool) else None),
             "budget": context.get("budget"),
+            "budget_chars": context.get('budget_chars'),
+            "retained_chars": context.get('retained_chars'),
+            "retained_fields": list(context.get('retained_fields') or ()) ,
             "retained_tokens": context.get("retained_tokens"),
             "submitted_tokens": context.get("submitted_tokens"),
             "omitted_fields": list(context.get("omitted_fields") or ()),
@@ -101,6 +146,7 @@ class LiveAgentState:
 
     def snapshot(self):
         return {
+            "moves": [dict(item) for item in reversed(self.moves)],
             "decision": dict(self.current),
             "decisions": [dict(item) for item in reversed(self.decisions)],
             "model_calls": [dict(item) for item in self.calls],

@@ -3,6 +3,8 @@ import hashlib
 import json
 import re
 
+RESOLVED_OUTCOMES = frozenset({'collected', 'harvested', 'exhausted', 'defeated', 'moved'})
+
 
 def normalized(text):
     return ' '.join(text.upper().split())
@@ -10,7 +12,13 @@ def normalized(text):
 
 def classify(npc):
     text = normalized(' '.join(npc.get('pages', ())))
-    if (re.search(r'\bPUT THE\b.+\bIN\b.+\bPOCKET\b', text)
+    if npc.get('category') == 'resource':
+        # A renewable object remains solid after harvesting. Merely reading
+        # its description or finding a full bag never proves a pickup.
+        result = resource_result(text)
+        if result:
+            npc.update(outcome=result, status='resolved')
+    elif (re.search(r'\bPUT THE\b.+\bIN\b.+\bPOCKET\b', text)
             and not re.search(r"(?:CAN.?T|CANNOT|COULD NOT) PUT", text)):
         npc.update(category='item', outcome='collected', status='resolved')
     elif npc.get('outcome') != 'moved' and re.search(
@@ -22,6 +30,16 @@ def classify(npc):
         npc.setdefault('outcome', 'conversed' if npc.get('status') == 'talked' else 'seen')
     npc.setdefault('action_attempts', {})
     return npc
+
+
+def resource_result(text):
+    text = normalized(text)
+    if re.search(r'\bOBTAINED\b.+[!.]|\bPUT THE\b.+\bIN\b.+\bPOCKET\b', text):
+        if not re.search(r"(?:CAN.?T|CANNOT|COULD NOT) (?:PUT|CARRY)|(?:PACK|BAG) IS FULL", text):
+            return 'harvested'
+    if re.search(r"THERE.{0,8}NOTHING(?: HERE)?", text):
+        return 'exhausted'
+    return None
 
 
 def evidence_key(state, npc, memory=None):
@@ -36,7 +54,7 @@ def evidence_key(state, npc, memory=None):
 
 
 def eligible(npc, context, action='interact'):
-    return (npc.get('outcome') not in {'collected', 'defeated', 'moved'}
+    return (npc.get('outcome') not in RESOLVED_OUTCOMES
             and npc.get('action_attempts', {}).get(context, {}).get(action, 0) < 2)
 
 
@@ -47,9 +65,9 @@ def attempt(npc, context, action='interact'):
 
 def close_interaction(npc):
     classify(npc)
-    if npc.get('outcome') == 'collected':
+    if npc.get('outcome') in RESOLVED_OUTCOMES:
         return
-    if npc.get('category') in {'obstacle', 'item'}:
+    if npc.get('category') in {'obstacle', 'item', 'resource'}:
         npc.update(status='pending', outcome='unresolved')
     else:
         npc.update(status='talked', outcome='conversed')

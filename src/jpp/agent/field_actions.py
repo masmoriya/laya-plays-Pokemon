@@ -2,7 +2,7 @@
 from .gold97_party import select_label
 from .gold97_battle_executor import party_step
 from ..field_moves import field_ready
-from .object_memory import normalized, evidence_key, eligible, attempt
+from .object_memory import classify, normalized, evidence_key, eligible, attempt
 from .gold97_choices import answer_button, choice_rows
 
 FIELD_MOVES = {'CUT', 'SURF', 'STRENGTH', 'FLASH', 'WHIRLPOOL', 'WATERFALL', 'ROCK SMASH'}
@@ -125,6 +125,7 @@ class FieldAction:
                 lines = ' '.join(line.strip() for line in state.screen_lines[12:] if line.strip())
                 if lines and lines not in self.npc['pages']:
                     self.npc['pages'].append(lines)
+                    classify(self.npc)
                     self.memory.save()
                 # Only accept a visible Yes/No confirmation; other menus close.
                 if getattr(state, 'screen_cursor', None) is not None:

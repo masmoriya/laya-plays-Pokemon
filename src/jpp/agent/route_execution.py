@@ -7,7 +7,7 @@ from .gold97_navigation import STEPS
 def committed_heading(owner, state, direction):
     strategy = owner.strategy
     target = strategy.target
-    if (owner.paused or state.in_battle or not target or strategy.future
+    if (owner.paused or state.in_battle or not target or (strategy.future and not strategy.shared_control)
             or strategy.observations.pending or owner.terrain is None
             or direction not in STEPS or target['map'] != f'{state.map_group:02X}:{state.map_number:02X}'):
         return False
@@ -23,6 +23,18 @@ def committed_heading(owner, state, direction):
         object.__setattr__(state, 'y', destination[1])
     if tuple(target['cell']) == (state.x, state.y):
         return False
+    from .navigation_policy import collectible, preferred_targets, COLLECTIBLES
+    from .object_memory import RESOLVED_OUTCOMES
+    if (not collectible(target) and not target.get('retreat_reason')
+            and any(obj['map'] == target['map'] and obj.get('category') in COLLECTIBLES
+                    and obj.get('outcome') not in RESOLVED_OUTCOMES
+                    for obj in strategy.data['npcs'].values())):
+        from .journey_targets import candidates
+        leads = preferred_targets(candidates(state, owner.memory, owner.terrain,
+                                              excluded=strategy.excluded,
+                                              reward_weights=owner.rewards.weights))
+        if any(collectible(lead) for lead in leads):
+            return False  # Reconsider before a held direction walks past a pickup.
     dx, dy = STEPS[direction]
     next_cell = state.x+dx, state.y+dy
     # Stop before a visible/remembered object or warp; the normal executor owns

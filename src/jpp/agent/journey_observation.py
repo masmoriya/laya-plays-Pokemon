@@ -16,8 +16,20 @@ class JourneyObservation:
         current = self.owner.route.now
         from .journey_hms import capability_key
         hm_key = capability_key(state)
+        from .hm_preparation import observe_encounter
+        from ..field_moves import HM_NAMES, normalize
+        observe_encounter(self.owner.memory, state)
+        self.owner.memory.world['field_capabilities'] = [
+            list(getattr(state, 'owned_hms', ())), list(getattr(state, 'badge_ids', ())),
+            sorted({normalize(move) for mon in getattr(state, 'party', ())
+                    for move in getattr(mon, 'moves', ()) if normalize(move) in
+                    {normalize(name) for name in HM_NAMES}}),
+            sorted({move for mon in getattr(state, 'party', ())
+                    for move in getattr(getattr(mon, 'species_data', None), 'field_moves', ())})]
         previous_hms = getattr(self, 'hm_key', None)
         self.hm_key = hm_key
+        self.owner.memory.world['navigation_capabilities'] = [
+            repr(hm_key), bool(getattr(state, 'route_103_slowpoke_cleared', False))]
         if previous_hms is not None and previous_hms != hm_key:
             self.excluded.clear()
             self.maps_since_evidence.clear()
@@ -54,6 +66,9 @@ class JourneyObservation:
             # RAM map IDs change during fades, before the first coherent map
             # frame. Use the last observed map, not that transient ID change.
             self.arrived_from = previous_map
+            self.owner.memory.world['navigation_arrival'] = {
+                'map': key_name, 'from': previous_map, 'cell': [state.x, state.y], 'goal': current}
+            self.owner.memory.save()
             self.maps_since_evidence.append(key)
             self.maps_since_evidence = self.maps_since_evidence[-12:]
         if (overworld and not state.in_battle and current is not None
@@ -91,8 +106,24 @@ class JourneyObservation:
         if self.maps_since_evidence.count(key) >= 3:
             self.maps_since_evidence.clear()
             self.failed("Repeated map cycle without new dialogue or discoveries")
+        if overworld and not state.in_battle and self.target:
+            from .interaction_refresh import refresh_interaction
+            refresh_interaction(self.target, self.data['npcs'])
         if self.target and self.target["kind"] == "explore":
             if [state.x, state.y] == self.target["cell"]:
+                if self.target.get('reobserve_interaction'):
+                    npc = self.data['npcs'].get(self.target['id'], {})
+                    if not npc.get('visible'):
+                        # Coordinates can arrive before the sprites/camera do.
+                        # Only a settled overworld view can disprove a lead.
+                        if not overworld or state.in_battle or getattr(state, 'player_moving', False):
+                            self.target['reobserve_ticks'] = 0
+                            return
+                        self.target['reobserve_ticks'] = self.target.get('reobserve_ticks', 0) + 1
+                        if self.target['reobserve_ticks'] < 24:
+                            return
+                        self.failed('Last-seen person was not found at the observed location')
+                        return
                 from .navigation_trace import record_target
                 from .exploration_cycles import evidence
                 record_target(self.owner.memory, self.target)
@@ -106,4 +137,4 @@ class JourneyObservation:
                 if discovered:
                     self.failures = 0
                     self.owner.movement_history.points.clear()
-                self.invalidate()
+                self.invalidate(preserve_pending=True)

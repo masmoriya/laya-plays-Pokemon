@@ -2,7 +2,7 @@
 
 from .gold97_items import item_cell
 from .object_memory import classify, close_interaction, manual_target, evidence_key, attempt
-from .journey_evidence import dialogue_text, migrate
+from .journey_evidence import VERSION, dialogue_text, migrate
 
 
 def knowledge(memory, enabled=True):
@@ -10,10 +10,14 @@ def knowledge(memory, enabled=True):
         "enabled": enabled, "npcs": {}, "clues": [], "connections": [],
         "events": [], "stats": {}, "plan": None, "route_maps": {},
     })
-    migrate(data)
-    data.setdefault("route_maps", {})
-    for npc in data["npcs"].values():
-        classify(npc)
+    # Reading knowledge must not reparse every historical conversation on
+    # every frame. Restores replace this dictionary and require initialization.
+    if getattr(memory, '_initialized_journey', None) is not data or data.get('version', 1) < VERSION:
+        migrate(data)
+        data.setdefault("route_maps", {})
+        for npc in data["npcs"].values():
+            classify(npc)
+        memory._initialized_journey = data
     return data
 
 
@@ -130,8 +134,12 @@ class JourneyKnowledge:
                     self.data["npcs"][identifier] = npc
                     changed = True
                 classify(npc)
-                if getattr(entity, 'kind', '') in {'item', 'obstacle', 'npc'}:
+                if getattr(entity, 'kind', '') in {'item', 'obstacle', 'npc', 'resource'}:
                     npc['category'] = entity.kind
+                    if entity.kind == 'resource' and npc.get('outcome') == 'conversed':
+                        # Older checkpoints treated the tree as ordinary chatter.
+                        npc.update(status='pending', outcome='seen')
+                    classify(npc)
                 npc["observed"] = True
                 npc["visible"] = True
                 if npc["cell"] != list(cell):
@@ -160,7 +168,7 @@ class JourneyKnowledge:
             })
             self.interacted(identifier)
         if (self.pending and not self.after_battle and not overworld
-                and not state.in_battle and prompt_visible is not False and dialogue_text(text)):
+                and not state.in_battle and prompt_visible is not False and self.readable(text)):
             if text != self.text and self.stable >= 2 and not text.startswith(self.text):
                 changed |= self.capture(self.text, key)
             self.stable = self.stable + 1 if text == self.text else 0
@@ -190,7 +198,7 @@ class JourneyKnowledge:
         return changed
 
     def capture(self, text, key):
-        if not self.pending or self.after_battle or not dialogue_text(text):
+        if not self.pending or self.after_battle or not self.readable(text):
             return False
         updated = False
         if self.pending:
@@ -198,6 +206,7 @@ class JourneyKnowledge:
             if npc and text not in npc["pages"]:
                 npc["pages"].append(text)
                 npc["pages"] = npc["pages"][-12:]
+                classify(npc)
                 updated = True
             self.pending["saw_text"] = True
         if any(c["text"] == text and c["map"] == key for c in self.data["clues"]):
@@ -212,6 +221,12 @@ class JourneyKnowledge:
         self.data["next_clue_id"] += 1
         self.memory.experience.record('clue', clue=self.data['clues'][-1])
         return True
+
+    def readable(self, text):
+        from .object_memory import resource_result
+        npc = self.data['npcs'].get((self.pending or {}).get('id'), {})
+        return dialogue_text(text) or (npc.get('category') == 'resource'
+                                      and resource_result(text) is not None)
 
     def interacted(self, identifier):
         npc = self.data["npcs"].get(identifier)

@@ -10,8 +10,12 @@ class DecisionChoice:
     def _decide_step(self, state, entities, overworld, options, note, key,
                      position, strategy_active, *, frame=None):
         body = decision_state(state, self.memory, note, key, position)
+        if overworld and not state.in_battle:
+            body['screen_text'] = []  # Overworld tiles are graphics, not dialogue.
         if not overworld and not state.in_battle:
             body["decision_kind"] = "dialogue"
+            from .gold97_choices import conversation_context
+            body['conversation'] = conversation_context(self)
         body["journey"] = self.strategy.context(state)
         body["strategy"] = self.strategy.data.get("plan")
         body["luna_enabled"] = self.strategy.enabled

@@ -29,6 +29,7 @@ _MAP_COMPLETIONS = {4: BRASS_TOWER_ROOF}
 _ARRIVALS = {
     1: "Silent Town", 3: "Pagota City",
     9: "Westport City", 11: "Teknos City", 17: "Birdon Town", 23: "Sunpoint City",
+    18: "Slowpoke Well B1F",
     31: "Alloy City", 38: "Blue Forest", 43: "Stand City",
     61: "Kanto", 87: "Westport Docks", 94: "Amami Town",
     97: "Ryukyu City", 99: "Kume City",
@@ -55,7 +56,7 @@ class RouteProgress:
             self.completed.update((1, 2))
         if getattr(state, "mechanics_verified", False):
             self.completed.update(step for step in getattr(state, "story_milestones", ())
-                                  if step in {1, 2, 3, 4, 9, 11, 12, 13, 14})
+                                  if step in {1, 2, 3, 4, 9, 11, 12, 13, 14, 16, 18})
         badges = len(getattr(state, "badge_ids", ()))
         if getattr(state, "received_cut_from_bill", False):
             self.completed.add(6)
