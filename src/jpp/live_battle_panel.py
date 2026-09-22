@@ -15,6 +15,11 @@ class LiveBattlePanel:
         battle = getattr(state, "battle", None)
         opponent = getattr(battle, "opponent", None)
         own = getattr(battle, "active", None)
+        if own is None:
+            party = getattr(state, "party", ()) or ()
+            slot = getattr(state, "active_slot", 0)
+            if 0 <= slot < len(party):
+                own = party[slot]
         label = getattr(state, "opponent_label", None)
         trainer_class = getattr(state, "opponent_trainer_class", None)
         self._combatant(pygame.Rect(994, 176, 422, self.CARD_HEIGHT), opponent,
@@ -118,8 +123,10 @@ class LiveBattlePanel:
         note = f"Pokédex · {category}"
         if entry:
             note += f" · {entry}"
-        self.ui.text(note, (box.x + 14, box.bottom - 17), self.ui.tiny, ACCENT,
-                     max_width=392)
+        lines = self.ui.wrap(note, self.ui.tiny, box.width - 28)
+        for index, line in enumerate(lines[:2]):
+            self.ui.text(line, (box.x + 14, box.bottom - 29 + index * 12),
+                         self.ui.tiny, ACCENT)
 
     def _journey(self, journey):
         box = pygame.Rect(994, 740, 422, 80)
