@@ -11,7 +11,7 @@ CURSORS = frozenset((0xEC, 0xED))
 # stable command-cursor tile.
 CURSOR = 0xED
 
-_CHARS = {0x7F: " ", 0xE3: "-", 0xE6: "?", 0xE7: ".", 0xE8: "!",
+_CHARS = {0x7F: " ", 0xE3: "-", 0xE6: "?", 0xE7: ".", 0xE8: "!", 0xF2: "…",
           0xF4: ",", 0xF5: ":"}
 _CHARS.update({0x80 + i: chr(65 + i) for i in range(26)})
 _CHARS.update({0xA0 + i: chr(97 + i) for i in range(26)})
@@ -62,7 +62,8 @@ def _looks_like_party(lines):
             continue
         name = lines[row].strip()
         details = lines[row + 1].upper()
-        if name and ("FNT" in details or any(char.isdigit() for char in details)):
+        if (any(char.isalpha() for char in name)
+                and ("FNT" in details or any(char.isdigit() for char in details))):
             return True
     return False
 
@@ -70,8 +71,9 @@ def _looks_like_party(lines):
 def battle_menu(lines, tiles):
     """Distinguish command, move, party, and text screens before reading a cursor."""
     text = " ".join(" ".join(lines).upper().split())
-    choices = {line.strip().upper() for line in lines}
-    if ({'YES', 'NO'} <= choices and
+    from .gold97_choices import yes_no_rows
+    choices = yes_no_rows(lines, cursor_cell(tiles))
+    if (choices and
             (('WILL' in text and 'CHANGE' in text) or 'SWITCH' in text)):
         return "switch_prompt", None
     if "USE NEXT" in text and "YES" in text and "NO" in text:
@@ -101,3 +103,18 @@ def battle_menu(lines, tiles):
     if any(any(tile for tile in row) for row in tiles):
         return "text", None
     return None, None
+
+
+def pc_screen(state):
+    """Recognize storage menus from named choices, independent of palette."""
+    text = " ".join(" ".join(getattr(state, "screen_lines", ()) or ()).upper().split())
+    return (("PC" in text and "TURN OFF" in text) or
+            ("ACCESS WHOSE" in text and "PC" in text) or
+            all(label in text for label in ("WITHDRAW", "DEPOSIT", "CHANGE BOX")))
+
+
+def party_screen(state):
+    """A fully drawn party menu, including its blinking cursor."""
+    lines = tuple(getattr(state, "screen_lines", ()) or ())
+    cursor = getattr(state, "screen_cursor", None)
+    return bool(cursor is not None and cursor[0] == 0 and _looks_like_party(lines))

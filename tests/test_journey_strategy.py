@@ -41,7 +41,8 @@ def test_npcs_precede_departure_and_unknown_identity_is_not_invented(controller)
     controller.strategy.observe(s, (sprite(),), True)
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
     tasks = candidates(s, controller.memory, terrain)
-    assert tasks and all(task["kind"] == "talk" for task in tasks)
+    assert tasks[0]["kind"] == "talk"
+    assert any(task["kind"] == "explore" for task in tasks)
     assert controller.strategy.summary()["goal"] == "Visit Bill after beating Falkner"
     assert "Bill" not in tasks[0]["label"]
 
@@ -152,7 +153,7 @@ def test_known_completed_tower_exit_replaces_climb(controller):
     terrain = Gold97CollisionMap((3, 5), 6, 6, bytes(36))
     controller.strategy.observe(s, (), True)
     tasks = candidates(s, controller.memory, terrain)
-    assert len(tasks) == 1 and tasks[0]["kind"] == "exit"
+    assert tasks[0]["kind"] == "exit"
     assert tasks[0]["cell"] == [5, 5]
 
 
@@ -181,6 +182,7 @@ def test_strategy_provider_exposes_the_exact_prompt_and_schema():
     assert model_input["model"] == "test-luna"
     assert json.dumps(payload) in model_input["prompt"]
     assert model_input["output_schema"]["properties"]["target"]["enum"] == ["exit:1"]
+    assert model_input["output_schema"]["properties"]["evidence"]["items"]["enum"] == ["exit:1"]
 
 
 def test_additive_save_and_preference_survive_reopen(tmp_path):
@@ -218,7 +220,8 @@ def test_goal_terms_rank_matching_map_without_a_story_specific_override(controll
     tasks = candidates(s, controller.memory, terrain)
     assert tasks[0]["destination"] == "Bills Familys House"
     assert tasks[0]["cell"] == [30, 22]
-    assert 25 < tasks[0]["journey_reward"] < 100
+    assert tasks[0]["journey_reward"] == 400
+    assert tasks[0]['prerequisite']  # Missed Cut acquisition now outranks text hints.
     assert not tasks[0]["goal_destination"]
     assert not tasks[0]["id"].startswith("guide:")
 
@@ -280,6 +283,32 @@ def test_route_goal_prefers_progress_gate_over_optional_route_house(controller):
     gate = next(task for task in tasks if "Westport Gate" in task.get("destination", ""))
     house = next(task for task in tasks if "N64 House" in task.get("destination", ""))
     assert gate["journey_reward"] > house["journey_reward"]
+
+
+def test_current_milestone_rewards_new_route_and_penalizes_immediate_return(controller):
+    controller.route.completed.update(range(6, 11))
+    controller.memory.world["route"] = controller.route.to_dict()
+    s = state()
+    s.map_group, s.map_number = 9, 10
+    s.area_name = "Route 102 Westport Gate"
+    s.x, s.y = 1, 1
+    s.map_width, s.map_height = 10, 8
+    s.mechanics_verified = True
+    s.map_exits = ((1, 0, "up", 9, 11), (9, 7, "down", 9, 1))
+    terrain = Gold97CollisionMap((9, 10), 10, 8, bytes(80))
+    controller.strategy.goal = 11
+    controller.strategy.map_key = (9, 11)
+    controller.strategy.observe(s, (), True)
+    tasks = controller.strategy.prioritize_forward_routes(
+        candidates(s, controller.memory, terrain))
+    forward = next(task for task in tasks if task.get("destination_key") == "09:01")
+    stairs = next(task for task in tasks if task.get("destination_key") == "09:0B")
+    assert forward["route_frontier"]
+    assert forward["journey_reward"] > stairs["journey_reward"]
+    assert stairs["recent_return"]
+    assert controller.strategy.options(s, terrain)
+    assert controller.strategy.target["destination_key"] == "09:01"
+    assert controller.strategy.future is None
 
 
 @pytest.mark.parametrize(("map_number", "position"), (
@@ -404,4 +433,21 @@ def test_blocked_exit_retry_preserves_cartridge_walls(controller):
     controller.memory.map('09:02')['blocked'] = [[[s.x, s.y], 'up']]
     assert not strategy.options(s, terrain)
     assert not controller.paused
-    assert strategy.status == "recovering"
+    assert strategy.status == "blocked"
+
+
+def test_actual_facing_overrides_sent_direction_before_talking(controller):
+    s = state()
+    s.x, s.y = 3, 1
+    s.player_facing = 'right'
+    controller.strategy.observe(s, (sprite(3, 2),), True)
+    terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
+    target = candidates(s, controller.memory, terrain)[0]
+    controller.strategy.target = target
+    for _ in range(24):
+        assert controller.strategy.options(s, terrain) == {}
+    controller.strategy.facing = (target['id'], 'down')
+    # A dispatched turn can be ignored while the previous step animates.
+    assert controller.strategy.options(s, terrain) == {'down': 'Face the sprite before speaking'}
+    s.player_facing = 'down'
+    assert controller.strategy.options(s, terrain) == {'a': 'Talk to the sprite'}

@@ -1,15 +1,19 @@
 """Checkpoint-owned observations and interactions, independent of model availability."""
 
 from .gold97_items import item_cell
+from .object_memory import classify, close_interaction, manual_target, evidence_key, attempt
 from .journey_evidence import dialogue_text, migrate
 
 
 def knowledge(memory, enabled=True):
     data = memory.world.setdefault("journey_strategy", {
         "enabled": enabled, "npcs": {}, "clues": [], "connections": [],
-        "events": [], "stats": {}, "plan": None,
+        "events": [], "stats": {}, "plan": None, "route_maps": {},
     })
     migrate(data)
+    data.setdefault("route_maps", {})
+    for npc in data["npcs"].values():
+        classify(npc)
     return data
 
 
@@ -34,40 +38,74 @@ class JourneyKnowledge:
         self.stable = 0
         self.revision = 0
         self.last_direction = ""
+        self.last_exits = ()
         self.after_battle = False
+        self.battle_interaction = None
 
     @property
     def data(self):
         return knowledge(self.memory)
 
     def observe(self, state, entities, *, overworld, milestone, prompt_visible=None):
+        self.state = state
         key = f"{state.map_group:02X}:{state.map_number:02X}"
         changed = False
+        if not state.in_battle and self.battle_interaction:
+            npc = self.data["npcs"].get(self.battle_interaction)
+            result = getattr(state, "battle_result", None)
+            if npc and result is not None and result & ~0xC0 == 0:
+                npc.update(status="talked", outcome="defeated")
+                npc["completed_milestone"] = milestone
+                record(self.memory, "conversation_battle_won", npc["id"])
+                changed = True
+            self.battle_interaction = None
         if state.in_battle:
+            # Preserve stable pre-battle dialogue; starting is not winning.
+            if self.pending and not self.after_battle:
+                if self.stable >= 2 and self.text:
+                    changed |= self.capture(self.text, key)
+                self.battle_interaction = self.pending["id"]
+                record(self.memory, "conversation_battle", self.pending["id"])
             self.pending = None
             self.after_battle = True
             self.text, self.stable = '', 0
         if overworld and not state.in_battle:
             self.after_battle = False
-        if overworld and self.last_map and self.last_map != key:
+        same_map_warp = (self.last_map == key and self.last_position is not None
+                         and abs(state.x-self.last_position[0]) + abs(state.y-self.last_position[1]) > 1
+                         and any(list(exit[:2]) == self.last_position for exit in self.last_exits)) if overworld else False
+        if overworld and self.last_map and (self.last_map != key or same_map_warp):
+            direction = next((direction for x, y, direction, group, number in self.last_exits
+                              if [x, y] == self.last_position
+                              and ((group, number) == (state.map_group, state.map_number)
+                                   or (group, number) == (0, 0))),
+                             self.last_direction)
             connection = {"from": self.last_map, "at": self.last_position,
                           "to": key, "arrival": [state.x, state.y],
-                          "direction": self.last_direction}
+                          "direction": direction}
             if connection not in self.data["connections"]:
                 self.data["connections"].append(connection)
                 changed = True
+            self.last_direction = ""
         if overworld and not state.in_battle:
             for npc in self.data["npcs"].values():
                 npc["visible"] = False
             if self.last_map == key and self.last_position:
+                from .navigation_trace import record_step
+                record_step(self.memory, key, self.last_position, (state.x, state.y))
                 delta = state.x - self.last_position[0], state.y - self.last_position[1]
                 directions = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
                 self.last_direction = directions.get(delta, self.last_direction)
             self.last_map, self.last_position = key, [state.x, state.y]
+            self.last_exits = getattr(state, "map_exits", ())
+            destinations = sorted({f'{group:02X}:{number:02X}'
+                                   for _, _, _, group, number in self.last_exits})
+            exits = self.data.setdefault('map_exits', {})
+            if destinations and exits.get(key) != destinations:
+                exits[key] = destinations
+                changed = True
             claimed = set()
             for entity in entities:
-                if getattr(entity, 'kind', '') == 'item':
-                    continue
                 cell = item_cell(entity)
                 if cell is None or getattr(entity, "key", "") == "player":
                     continue
@@ -91,8 +129,16 @@ class JourneyKnowledge:
                            "pages": []}
                     self.data["npcs"][identifier] = npc
                     changed = True
+                classify(npc)
+                if getattr(entity, 'kind', '') in {'item', 'obstacle', 'npc'}:
+                    npc['category'] = entity.kind
+                npc["observed"] = True
                 npc["visible"] = True
                 if npc["cell"] != list(cell):
+                    if npc.get('category') == 'obstacle' and npc.get('outcome') == 'unresolved':
+                        npc.update(outcome='moved', status='resolved', last_result='Observed object movement')
+                        self.memory.clear_transient_blocks(key)
+                        changed = True
                     npc["cell"] = list(cell)
                 if npc["milestone"] != milestone:
                     npc["milestone"] = milestone
@@ -106,7 +152,7 @@ class JourneyKnowledge:
                 and not self.after_battle and prompt_visible is True
                 and getattr(state, "screen_cursor", None) is None
                 and dialogue_text(text) and state.x is not None and state.y is not None):
-            identifier = f"{key}/interaction:{state.x}:{state.y}"
+            identifier = manual_target(self.data, state, key)
             self.data["npcs"].setdefault(identifier, {
                 "id": identifier, "map": key, "cell": [state.x, state.y],
                 "observed_from": [state.x, state.y], "visible": False,
@@ -127,7 +173,7 @@ class JourneyKnowledge:
             npc = self.data["npcs"].get(self.pending["id"])
             self.pending["ticks"] += 1
             if self.pending["saw_text"]:
-                npc["status"] = "talked"
+                close_interaction(npc)
                 npc["completed_milestone"] = milestone
                 record(self.memory, "conversation", npc["id"])
                 self.pending = None
@@ -172,5 +218,7 @@ class JourneyKnowledge:
         if npc and not self.pending:
             self.text, self.stable = "", 0
             npc["attempts"] += 1
+            state = getattr(self, 'state', None)
+            attempt(npc, evidence_key(state, npc, self.memory))
             self.pending = {"id": identifier, "ticks": 0, "saw_text": False}
             self.memory.save()

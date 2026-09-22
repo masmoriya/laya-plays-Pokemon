@@ -6,6 +6,7 @@ from .gold97_damage import incoming, attacks
 from .gold97_rewards import progress_units, DEFAULT_WEIGHTS
 from .gold97_encounters import healthy
 from .gold97_navigation import STEPS
+from .gold97_readiness import assess_party
 
 
 class Training:
@@ -18,12 +19,22 @@ class Training:
         self.last_foe = None
         self.last_frame = None
         self.intent = ''
+        self.local_opponents = {}
 
     @property
     def data(self):
         return self.memory.world.setdefault('training', {'evidence': None, 'frames': 0,
                                                         'battles': 0, 'active': False,
                                                         'exhausted': False})
+
+    @property
+    def enabled(self):
+        return bool(self.memory.world.get('training_enabled', False))
+
+    def toggle(self):
+        self.memory.world['training_enabled'] = not self.enabled
+        self.memory.save()
+        return self.enabled
 
     def observe(self, state, route):
         data = self.data
@@ -34,6 +45,8 @@ class Training:
             data.pop('readiness_failure', None)
         foe = getattr(state.battle, 'opponent', None)
         if state.in_battle and not self.was_battle and getattr(foe, 'level', None):
+            area = getattr(state, 'area_name', '')
+            self.local_opponents[area] = (self.local_opponents.get(area, []) + [foe])[-5:]
             self.levels = (self.levels + [foe.level])[-5:]
             data['levels'] = self.levels
             if state.battle.kind == 'trainer' and is_dataclass(foe):
@@ -61,12 +74,35 @@ class Training:
             self.last_saved = frame
 
     def trainee(self, state):
-        if len(state.party) < 2 or not self.levels:
+        if len(state.party) < 2:
             return None
-        target = int(median(self.levels)) + 1
+        target = int(median(self.levels)) + 1 if self.levels else 10
         candidates = [(m.level, i) for i, m in enumerate(state.party)
-                      if healthy(m) and m.level < target and str(m.held_item).upper() != 'EXP SHARE']
+                      if healthy(m) and m.level < target and str(m.held_item).upper() != 'EXP SHARE'
+                      and any(i != j and healthy(partner) and partner.level >= m.level + 3
+                              for j, partner in enumerate(state.party))]
         return min(candidates)[1] if candidates else None
+
+    def travel_lead(self, state, terrain):
+        """Keep a capable partner in front while pursuing the Journey."""
+        if state.in_battle:
+            return None
+        readiness = self.readiness(state)
+        if self.enabled:
+            return min(readiness.capable_slots, key=lambda i: state.party[i].level,
+                       default=readiness.lead)
+        return readiness.lead
+
+    def readiness(self, state):
+        area = getattr(state, 'area_name', '')
+        known = self.data.get('opponents', {}).get(area)
+        foes = tuple(self.local_opponents.get(area, ()))
+        if getattr(state, 'in_battle', False):
+            foe = getattr(getattr(state, 'battle', None), 'opponent', None)
+            if foe is not None:
+                foes += (foe,)
+        return assess_party(state, threats=foes,
+                            required=Mon(**known) if known else None)
 
     def required(self, state):
         """Training may preempt the Journey only after a verified trainer loss."""
@@ -116,7 +152,7 @@ class Training:
     def summary(self, state, weights=None):
         weights = weights or DEFAULT_WEIGHTS
         target = int(median(self.levels)) + 1 if self.levels else None
-        return {'intent': self.intent, 'encounters': self.data['battles'],
+        return {'enabled': self.enabled, 'intent': self.intent, 'encounters': self.data['battles'],
                 'emulated_frames': self.data['frames'], 'exhausted': self.data['exhausted'],
                 'deficits': [{'species': m.species, 'levels': max(0, target - m.level),
                               'progress_tenth': progress_units(m),

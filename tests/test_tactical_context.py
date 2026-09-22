@@ -47,3 +47,18 @@ def test_essential_screen_cannot_be_silently_dropped(agent):
     with pytest.raises(ValueError, match='essential screen_text'):
         pack_context({'goal': 'Read menu', 'screen_text': ['Very long menu ' * 2000]},
                      _questions({'a': 'Confirm', 'b': 'Cancel'}), agent)
+
+
+def test_ferry_prerequisite_reaches_actual_tokenizer(agent):
+    from jpp.agent.journey_prerequisites import prerequisite_context
+    from jpp.route_progress import MAIN
+
+    prerequisite = prerequisite_context(SimpleNamespace(mechanics_verified=True), 11)
+    state = {'goal': MAIN[11], 'decision_kind': 'dialogue', 'map': 'Westport Port',
+             'position': [7, 15], 'screen_text': ['TEKNOS CITY', 'CANCEL'],
+             'journey': {'prerequisites': prerequisite},
+             'memory': ['Old observations'] * 500}
+    packed, meta = pack_context(state, _questions({'a': 'Confirm', 'b': 'Cancel'}), agent)
+    assert packed['prerequisites'] == prerequisite['instruction']
+    assert packed['screen_text'] == state['screen_text']
+    assert meta['retained_tokens'] <= meta['budget']

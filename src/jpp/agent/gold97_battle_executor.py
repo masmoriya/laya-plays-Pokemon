@@ -1,8 +1,7 @@
 """Observed-menu execution of battle actions, independent of tactical scoring."""
 from .gold97_battle import BattleAction
-
-
 from .gold97_battle_menus import party_step, root_step, heal_step
+from .gold97_encounters import capture_eligible
 
 
 class BattleExecutor:
@@ -23,6 +22,61 @@ class BattleExecutor:
         self.decline_optional_switch = False
         self.rejected_switch_target = None
         self.rejected_switch_active = None
+        self.battle_kind = None
+        self.opponent_species_id = None
+
+    def _publish_decision(self, owner, state):
+        publish = getattr(owner, 'set_battle_decision', None)
+        if callable(publish):
+            publish(state, self.action)
+
+    @staticmethod
+    def _plan(owner, state, **kwargs):
+        if state.battle.kind != 'wild' or kwargs.get('forced') or kwargs.get('optional'):
+            return owner.battle_strategy.plan(state, **kwargs)
+        training = getattr(owner, 'training', None)
+        readiness = training.readiness(state) if training is not None else None
+        intent = ('practice' if training is not None and training.enabled else
+                  'training' if training is not None and training.data['active'] else 'travel')
+        return owner.battle_strategy.plan(state, intent=intent, readiness=readiness, **kwargs)
+
+    @staticmethod
+    def _publish_result(owner, value):
+        live = getattr(owner, 'live', None)
+        publish = getattr(live, 'result', None)
+        if callable(publish):
+            publish(value)
+
+    def _reconcile_battle(self, owner, state):
+        """Discard intent that belongs to a different or no-longer-legal fight."""
+        battle = getattr(state, 'battle', None)
+        kind = getattr(battle, 'kind', None)
+        foe = getattr(battle, 'opponent', None)
+        species_id = getattr(foe, 'species_id', None)
+        changed = (self.battle_kind is not None and kind != self.battle_kind)
+        changed |= (self.opponent_species_id is not None and species_id is not None
+                    and species_id != self.opponent_species_id)
+        invalidated = changed
+        if changed:
+            self.reset()
+            owner.battle_strategy.reset()
+        self.battle_kind = kind
+        if species_id is not None:
+            self.opponent_species_id = species_id
+        illegal_capture = (self.action and self.action.kind == 'ball'
+                           and (kind != 'wild'
+                                or (self.phase not in {'throw', 'ball_result'}
+                                    and not capture_eligible(
+                                        owner.battle_strategy, state, foe))))
+        if illegal_capture:
+            self.reset()
+            self.battle_kind = kind
+            self.opponent_species_id = species_id
+            invalidated = True
+        if invalidated:
+            publish = getattr(owner, 'set_battle_pending', None)
+            if callable(publish):
+                publish(state)
 
     @staticmethod
     def signature(state):
@@ -38,6 +92,7 @@ class BattleExecutor:
         if getattr(state, 'mechanics_verified', True) is False:
             owner.pause('Cartridge battle tables do not match the supported mechanics')
             return None
+        self._reconcile_battle(owner, state)
         active = getattr(state.battle, 'active', None)
         # The battle RAM struct is briefly unavailable during trainer send-out
         # and on some emulator frames.  That must not disable local execution:
@@ -85,6 +140,24 @@ class BattleExecutor:
             if resolved:
                 owner.battle_strategy.capture_attempts = getattr(owner.battle_strategy, 'capture_attempts', 0) + 1
         if resolved:
+            completed = self.action
+            if completed is not None:
+                if completed.kind == 'switch':
+                    owner.battle_strategy.record_switch(self.before[0])
+                    current = getattr(state.battle, 'active', None)
+                    self._publish_result(
+                        owner,
+                        f"{getattr(current, 'species', 'Pokémon').title()} entered battle",
+                    )
+                elif completed.kind == 'move':
+                    self._publish_result(
+                        owner,
+                        f"Opponent HP {getattr(state.battle.opponent, 'hp', '?')}",
+                    )
+                elif completed.kind == 'heal':
+                    self._publish_result(owner, f"HP {getattr(active, 'hp', '?')}")
+                else:
+                    self._publish_result(owner, "Battle state advanced")
             self.unresolved_turns = 0
             self.confirmed = None
             self.before = None
@@ -132,11 +205,13 @@ class BattleExecutor:
             if menu == 'switch_prompt' and self.decline_optional_switch:
                 self.action = BattleAction('stay', reason='Stay in: rejected switch target')
             else:
-                self.action = owner.battle_strategy.plan(state, optional=menu == 'switch_prompt',
+                self.action = self._plan(owner, state, optional=menu == 'switch_prompt',
                                                          forced=menu == 'forced_prompt')
+            self._publish_decision(owner, state)
             owner._set_provider_event(self.action.reason)
             answer = 'YES' if self.action.kind == 'switch' else 'NO'
-            row = next((i for i, line in enumerate(lines) if line.strip().upper() == answer), None)
+            from .gold97_choices import choice_rows
+            row = (choice_rows(state) or {}).get(answer.lower())
             screen_cursor = getattr(state, 'screen_cursor', None)
             if row is None or screen_cursor is None:
                 return None
@@ -162,7 +237,7 @@ class BattleExecutor:
             if self.action is None or self.action.kind not in {'switch', 'heal'}:
                 if active.hp > 0:
                     return 'b'
-                self.action = owner.battle_strategy.plan(state, forced=True)
+                self.action = self._plan(owner, state, forced=True)
             if self.action.target is None:
                 owner.pause(self.action.reason)
                 return None
@@ -188,9 +263,26 @@ class BattleExecutor:
             button = party_step(cursor, self.action.target)
             if button == 'a':
                 self.confirmed, self.before = frame, signature
+                if self.action.kind == 'heal':
+                    self.phase = 'heal_result'
                 owner.battle_switch_phase = 'wait'
             return button
         if menu == 'text':
+            if self.action is None and getattr(state, 'screen_cursor', None) is not None and (
+                    'CANCEL' in text or ('USE' in text and
+                    ('POTION' in text or ('POK' in text and 'BALL' in text)))):
+                # A restored checkpoint can already be inside the Pack. Rebuild
+                # the tactical intent before touching the highlighted item.
+                self.action = self._plan(owner, state)
+                self._publish_decision(owner, state)
+                self.phase = self.action.kind
+                if 'USE' in text.split():
+                    self.phase = {'ball': 'use_ball', 'heal': 'use_potion'}.get(
+                        self.action.kind, self.phase)
+                if self.action.kind not in {'ball', 'heal'}:
+                    self.action = None
+                    self.phase = None
+                    return 'b'
             if self.action and self.action.kind == 'ball':
                 from .gold97_capture import ball_step
                 return ball_step(self, state, lines, frame, signature)
@@ -218,7 +310,8 @@ class BattleExecutor:
                     owner._set_provider_event('Re-reading battle after unresponsive actions')
                     return 'b'
             if self.action is None or self.phase == 'resolve':
-                self.action = owner.battle_strategy.plan(state)
+                self.action = self._plan(owner, state)
+                self._publish_decision(owner, state)
             owner._set_provider_event(self.action.reason)
             if self.action.kind == 'wait':
                 return None
@@ -236,6 +329,7 @@ class BattleExecutor:
                 return None
             if self.action is None:
                 self.action = owner.battle_strategy.attack(active, state.battle.opponent)
+                self._publish_decision(owner, state)
             if self.action.kind not in {'move', 'struggle'}:
                 return 'b'
             if cursor is None:

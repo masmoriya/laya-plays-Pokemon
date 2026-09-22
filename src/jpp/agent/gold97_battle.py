@@ -11,7 +11,7 @@ from .gold97_move_data import MOVE_OVERRIDES
 
 from dataclasses import dataclass
 from math import ceil
-from .gold97_mechanics import TYPE_CHART as _GOLD97_TYPE_CHART, move_info, multiplier, REFERENCE
+from .gold97_mechanics import move_info, multiplier, REFERENCE
 from .gold97_damage import attacks, estimate, incoming, acts_first
 
 
@@ -59,9 +59,18 @@ class BattleAction:
 class Gold97BattleStrategy:
     """Pure turn planning: repeated observations cannot consume setup or turns."""
 
+    def __init__(self):
+        self.reset()
+
     def reset(self):
         self.capture_attempts = 0
         self.static_capture = False
+        self.switched_from = set()
+
+    def record_switch(self, previous_slot):
+        """Only confirmed entries consume a handoff, never repeated planning."""
+        if previous_slot is not None:
+            self.switched_from.add(previous_slot)
 
     def choose(self, active, opponent=None):
         return self.attack(active, opponent).target
@@ -97,10 +106,10 @@ class Gold97BattleStrategy:
         reason = 'Attack: likely knockout' if hp and best.bounded and best.low >= hp else 'Attack: best nominal damage; modifiers uncertain'
         return BattleAction('move', index, reason)
 
-    def plan(self, state, *, optional=False, forced=False):
+    def plan(self, state, *, optional=False, forced=False, intent='travel', readiness=None):
         if state.battle.kind == 'wild' and not optional and not forced:
             from .gold97_encounters import encounter_action
-            return encounter_action(self, state)
+            return encounter_action(self, state, intent=intent, readiness=readiness)
         return self.combat_plan(state, optional=optional, forced=forced)
 
     def combat_plan(self, state, *, optional=False, forced=False):
@@ -131,6 +140,8 @@ class Gold97BattleStrategy:
         if forced or active.hp <= 0:
             return (BattleAction('switch', replacement[0], 'Switch: healthy replacement') if replacement
                     else BattleAction('wait', reason='No verified healthy replacement'))
+        if getattr(state, 'switch_allowed', None) is False:
+            replacement = None
         attack = self.attack(active, foe)
         threat = incoming(foe, active)
         if optional:
@@ -142,6 +153,18 @@ class Gold97BattleStrategy:
         faster = attack.target is not None and acts_first(active, foe, active.moves[attack.target])
         if chosen and chosen.bounded and chosen.low >= getattr(foe, 'hp', 1) and chosen.accuracy >= .95 and faster:
             return attack
+        if (replacement and replacement[0] not in self.switched_from
+                and chosen and chosen.known and getattr(foe, 'hp', 0) > 0):
+            bench = replacement[1]
+            stronger = max((e for _, e in attacks(bench, foe) if e.known),
+                           key=lambda e: e.expected, default=None)
+            risk = incoming(foe, bench)
+            if stronger and risk and stronger.expected > chosen.expected * 1.5:
+                switch_turns = 1 + ceil(foe.hp / max(1, stronger.expected))
+                stay_turns = ceil(foe.hp / max(1, chosen.expected))
+                if switch_turns < stay_turns and bench.hp > risk.high * switch_turns:
+                    return BattleAction('switch', replacement[0],
+                                        'Switch: stronger matchup saves turns after entry cost')
         if threat and active.hp <= threat.high:
             if replacement:
                 risk = incoming(foe, replacement[1])

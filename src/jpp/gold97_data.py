@@ -56,6 +56,7 @@ class SpeciesData:
     entry: str | None = None
     growth_rate: int | None = None
     catch_rate: int | None = None
+    field_moves: tuple[str, ...] = ()
 
 
 def _game_text(raw: bytes) -> str:
@@ -175,6 +176,7 @@ class Gold97RomData:
             entry=entry[3] if entry else None,
             growth_rate=stats[2] if stats else None,
             catch_rate=stats[3] if stats else None,
+            field_moves=stats[4] if stats else (),
         )
 
     def _base_stats(self, species_id: int):
@@ -188,7 +190,10 @@ class Gold97RomData:
         if raw[0] != species_id or not all(values) or raw[7] >= len(_TYPE_NAMES) or raw[8] >= len(_TYPE_NAMES):
             return None
         first, second = _TYPE_NAMES[raw[7]], _TYPE_NAMES[raw[8]]
-        return ((first,) if first == second else (first, second), values, raw[22], raw[9])
+        from .field_moves import HM_NAMES
+        moves = tuple(name for i, name in enumerate(HM_NAMES)
+                      if raw[24 + (50 + i) // 8] & (1 << ((50 + i) % 8)))
+        return ((first,) if first == second else (first, second), values, raw[22], raw[9], moves)
 
     def _pokedex_entry(self, species_id: int):
         offsets = self._pokedex_offsets()

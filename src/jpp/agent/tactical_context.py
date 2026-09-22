@@ -19,9 +19,18 @@ def pack_context(state, questions, agent):
     ordered = {
         'goal': state.get('goal'),
         'decision_kind': state.get('decision_kind'),
+        'hm_next': (journey.get('hm_journey') or {}).get('instruction'),
         'map': state.get('map'), 'position': state.get('position'),
         'screen_text': state.get('screen_text'), 'battle': state.get('battle'),
+        'hm_pending': (journey.get('hm_journey') or {}).get('pending'),
+        'next_tasks': [{'task': item.get('label'), 'journey_reward': item.get('journey_reward', 0)}
+                       for item in journey.get('candidates', [])[:4]],
         'strategy': state.get('strategy'),
+        'operator_guidance': journey.get('operator_guidance'),
+        'operator_notes': journey.get('operator_notes'),
+        'context_mode': journey.get('context_mode'),
+        'route_progress': journey.get('route_progress'),
+        'prerequisites': (journey.get('prerequisites') or {}).get('instruction'),
         'failed_attempts': [{'target': item['target'], 'reason': item['reason'][:120]}
                             for item in journey.get('failed_attempts', [])[-3:]],
         'recent': journey.get('recent', [])[-4:],

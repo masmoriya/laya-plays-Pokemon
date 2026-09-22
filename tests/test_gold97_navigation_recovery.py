@@ -49,6 +49,15 @@ def test_successful_circle_chooses_unvisited_road_and_idle_is_not_a_loop():
     assert not history.looping
 
 
+def test_stair_cycle_is_detected_across_map_transitions():
+    history = MovementHistory()
+    cycle = [('09:0A', (1, 1)), ('09:0A', (1, 0)),
+             ('09:0B', (5, 0)), ('09:0B', (5, 1))]
+    for point in cycle * 3:
+        history.observe(*point)
+    assert history.looping
+
+
 def test_badge_exit_replans_through_winding_road(tmp_path):
     # A synthetic collision fixture checks the algorithm, not cartridge layout.
     width, height = 10, 16

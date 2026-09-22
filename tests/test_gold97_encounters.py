@@ -26,10 +26,22 @@ def state(active, foe, **kw):
 def test_ordinary_wild_is_fought_and_eligible_species_is_captured():
     active, foe = mon(), mon(species='RATTATA', species_id=19, hp=8, max_hp=20, level=8)
     policy = Gold97BattleStrategy()
-    assert policy.plan(state(active, foe)).kind == 'move'
+    party = (active, mon(slot=2))
+    assert policy.plan(state(active, foe, party=party)).kind == 'move'
     foe = replace(foe, species='TANGTRIP', species_id=1)
-    assert policy.plan(state(active, foe)).kind == 'ball'
-    assert policy.plan(state(active, foe, poke_ball_count=0)).kind == 'move'
+    assert policy.plan(state(active, foe, party=party)).kind == 'ball'
+    assert policy.plan(state(active, foe, party=party, poke_ball_count=0)).kind == 'move'
+
+
+def test_static_encounter_never_recaptures_owned_species():
+    active = mon()
+    foe = mon(species='TANGTRIP', species_id=1, hp=8, max_hp=20, level=8)
+    policy = Gold97BattleStrategy()
+    policy.static_capture = True
+
+    result = policy.plan(state(active, foe, pokedex_caught_ids=(1,)))
+
+    assert result.kind != 'ball'
 
 
 def test_training_switch_requires_surviving_replacement():
@@ -37,7 +49,7 @@ def test_training_switch_requires_surviving_replacement():
                stats=(15,15,15,15,15))
     strong = mon()
     foe = replace(weak, species='RATTATA', types=('NORMAL',), moves=('TACKLE',), pp=(30,))
-    result = Gold97BattleStrategy().plan(state(weak, foe, party=(weak,strong)))
+    result = Gold97BattleStrategy().plan(state(weak, foe, party=(weak,strong,mon(slot=3))), intent='training')
     assert result.kind == 'switch' and result.target == 1
     result = Gold97BattleStrategy().plan(state(replace(weak,hp=1), foe, party=(replace(weak,hp=1),)))
     assert result.kind == 'escape'

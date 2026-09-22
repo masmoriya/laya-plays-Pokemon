@@ -2,7 +2,7 @@
 
 from .gold97_items import item_cell
 from .gold97_opening import _route
-from .gold97_services import center_retreat_target, center_target, is_center, is_mart, mart_target, needs_healing, nurse_target, should_buy_balls
+from .gold97_services import center_retreat_target, center_target, is_center, is_mart, mart_target, nurse_target, should_buy_balls
 from .gold97_shopping import mart_menu_step
 from .controller_constants import _MOVE_HOLD_FRAMES
 
@@ -40,9 +40,21 @@ class ServiceExecution:
         town_key = (state.map_group, state.map_number)
         check_in = (center_target(state) is not None and
                     getattr(state, "last_spawn_map", town_key) != town_key)
-        if self.recovery is None and (needs_healing(state) or check_in):
-            self.recovery = {"started": True, "attempts": 0}
-            self._set_provider_event("Visiting the local Pokémon Center")
+        readiness = self.training.readiness(state)
+        # Healing cannot fix a level deficit in an otherwise recovered party.
+        from .gold97_services import fully_recovered, needs_healing
+        readable = all(hasattr(mon, 'hp') and hasattr(mon, 'max_hp') for mon in state.party)
+        detour = readable and (readiness.needs_detour or
+                               (self.training.enabled and needs_healing(state))) and not fully_recovered(state)
+        if (self.recovery and self.recovery.get('reason') == 'healing'
+                and not self.recovery.get('exit') and not is_center(state) and not detour):
+            self.recovery = None
+            self._set_provider_event(readiness.reason)
+        if self.recovery is None and (detour or check_in or is_center(state)):
+            self.recovery = {"started": True, "attempts": 0,
+                             "reason": "checkpoint" if check_in else "healing"}
+            self._set_provider_event("Return to heal the training party" if detour and self.training.enabled
+                                     else readiness.reason if detour else "Visiting the local Pokémon Center")
         if self.recovery is None:
             return None
         if is_center(state):
@@ -74,6 +86,7 @@ class ServiceExecution:
             return self._service_route(state, target, "Heal at the Pokémon Center")
         if self.recovery.get("exit"):
             self.recovery = None
+            self.strategy.invalidate()
             self._set_provider_event("Pokémon Center visit complete")
             return None
         if not overworld:

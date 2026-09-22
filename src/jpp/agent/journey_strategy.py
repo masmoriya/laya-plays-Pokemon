@@ -1,15 +1,18 @@
 """Event-driven journey planning shared by live and headless controllers."""
 
-from time import monotonic
+from time import monotonic, time
 from .journey_context import strategy_context, strategy_summary
 from .journey_knowledge import JourneyKnowledge, knowledge, record
 from .journey_strategy_provider import JourneyStrategyProvider, validate_plan
 from .journey_targets import target_options
 from .journey_planning import JourneyPlanning
+from .journey_observation import JourneyObservation
 
 
-class JourneyStrategy(JourneyPlanning):
+class JourneyStrategy(JourneyObservation, JourneyPlanning):
     def __init__(self, controller, provider=None, enabled=True):
+        from .field_actions import FieldAction
+        self.field_action = FieldAction()
         self.owner = controller
         self.default_enabled = enabled
         self.provider = provider or JourneyStrategyProvider()
@@ -19,6 +22,7 @@ class JourneyStrategy(JourneyPlanning):
         self.generation = 0
         self.goal = None
         self.map_key = None
+        self.arrived_from = None
         self.target = None
         self.payload = None
         self.failures = 0
@@ -64,6 +68,7 @@ class JourneyStrategy(JourneyPlanning):
                 self.retired.append(("plan", self.future))
         self.future = None
         self.target = None
+        self.warp_wait = 0
         self.facing = None
         self.data["plan"] = None
         if self.owner.decision_future:
@@ -92,53 +97,15 @@ class JourneyStrategy(JourneyPlanning):
         record(self.owner.memory, "mode_change", self.status)
         self.owner._set_provider_event(f"Luna strategy {'On' if self.enabled else 'Off'}")
 
-    def observe(self, state, entities, overworld, prompt_visible=None):
-        self.poll_retired()
-        if id(self.owner.memory.world) != self.world_id:
-            self.world_id = id(self.owner.memory.world)
-            self.observations = JourneyKnowledge(self.owner.memory)
-            self.invalidate()
-            self.goal = None
-        current = self.owner.route.now
-        key = (state.map_group, state.map_number)
-        pending = self.observations.pending
-        changed = self.observations.observe(state, entities, overworld=overworld,
-                                            milestone=current, prompt_visible=prompt_visible)
-        if current != self.goal or key != self.map_key:
-            if self.goal is not None and current != self.goal:
-                record(self.owner.memory, "milestone_change", str(current))
-            if current != self.goal:
-                self.maps_since_evidence.clear()
-            elif overworld and key != self.map_key:
-                self.last_transition_target = self.target
-                self.maps_since_evidence.append(key)
-                self.maps_since_evidence = self.maps_since_evidence[-12:]
-            self.goal, self.map_key = current, key
-            self.excluded.clear()
-            self.invalidate()
-        elif changed:
-            # Seeing another sprite or another text page does not cancel a
-            # committed route. Replan after the conversation actually closes.
-            if ((pending and not self.observations.pending) or
-                    (not self.target and not self.future and not self.observations.pending)):
-                self.failures = 0
-                self.excluded.clear()
-                self.owner.movement_history.points.clear()
-                self.maps_since_evidence.clear()
-                self.invalidate()
-        if self.maps_since_evidence.count(key) >= 3:
-            self.maps_since_evidence.clear()
-            self.failed("Repeated map cycle without new dialogue or discoveries")
-        if self.target and self.target["kind"] == "explore":
-            if [state.x, state.y] == self.target["cell"]:
-                record(self.owner.memory, "subgoal_completed", self.target["id"])
-                self.failures = 0
-                self.owner.movement_history.points.clear()
-                self.invalidate()
-
     def failed(self, reason):
         target = self.target or self.last_transition_target
         if target:
+            from .navigation_trace import record_target
+            record_target(self.owner.memory, target)
+            npc = self.data['npcs'].get(target['id'])
+            if npc and npc.get('category') in {'item', 'obstacle'}:
+                from .object_memory import attempt, evidence_key
+                attempt(npc, evidence_key(self.observations.state, npc, self.owner.memory), 'approach')
             self.excluded.add(target["id"])
             self.owner.memory.experience.fail(self.owner.route.now, target, reason)
         self.failures += 1
@@ -151,24 +118,64 @@ class JourneyStrategy(JourneyPlanning):
 
     def options(self, state, terrain):
         self.position = [state.x, state.y]
-        durable = {key for item in self.owner.memory.experience.failures(self.owner.route.now)
+        failures = self.owner.memory.experience.failures(self.owner.route.now)
+        transient = {"Target is no longer reachable", "Repeated movement without new evidence",
+                     "Repeated map cycle without new dialogue or discoveries"}
+        expired = [item for item in failures if item["reason"] in transient
+                   and time() - item.get("timestamp", 0) >= 60]
+        self.excluded.difference_update(item["target"] for item in expired)
+        durable = {key for item in failures if item not in expired
                    for key in (item['target'], item['target_key'])}
         if self.owner.movement_history.looping:
             self.failed("Repeated movement without new evidence")
         if self.owner.paused:
             return {}
+        if not self.observations.pending:
+            self.reconsider_obstacle(state, terrain, durable)
         if self.target:
             result = target_options(self.target, state, self.owner.memory, terrain,
                                     self.observations.pending)
             if result:
                 if self.target["kind"] == "talk" and "a" in result:
                     direction = self.target["direction"]
-                    if self.facing != (self.target["id"], direction):
+                    settle = (self.target['id'], tuple(self.position), direction)
+                    if getattr(self, 'interaction_arrival', None) != settle:
+                        self.interaction_arrival, self.interaction_ticks = settle, 0
+                        self.facing = None
+                    if self.interaction_ticks < 24:
+                        self.interaction_ticks += 1
+                        self.owner.held_action = None
+                        self.owner.last = None
+                        return {}
+                    observed_facing = getattr(state, 'player_facing', None)
+                    if (observed_facing != direction if observed_facing is not None
+                            else self.facing != (self.target["id"], direction)):
                         return {direction: "Face the sprite before speaking"}
-                    return {"a": "Talk to the sprite"}
+                    npc = self.data['npcs'][self.target['id']]
+                    if npc.get('category') == 'obstacle' and npc.get('outcome') == 'unresolved':
+                        from .field_actions import strength_push
+                        if strength_push(state, npc, self.owner.memory):
+                            return {direction: 'Push the obstacle with active Strength'}
+                        from .field_actions import experiments
+                        if experiments(state, npc, self.owner.memory):
+                            return {'start': 'Inspect a party field move for this obstacle'}
+                    return {"a": (self.target["label"] if npc.get("category") in {"item", "obstacle"}
+                                  else "Talk to the sprite")}
+                self.interaction_arrival = None
+                self.facing = None
                 return result
             if self.observations.pending:
                 return {}
+            if (self.target["kind"] == "exit" and not self.target.get("direction")
+                    and self.position == self.target["cell"]):
+                # Coordinates arrive before a stair/door animation completes.
+                # Keep ownership until its observed transition, rather than
+                # declaring the successful approach unreachable and walking back.
+                self.warp_wait = getattr(self, "warp_wait", 0) + 1
+                if self.warp_wait <= 90:
+                    self.owner.held_action = None
+                    return {}
+            self.warp_wait = 0
             self.failed("Target is no longer reachable")
             if self.owner.paused:
                 return {}
@@ -188,11 +195,17 @@ class JourneyStrategy(JourneyPlanning):
                 plan, usage = future.result()
                 plan = validate_plan(plan, self.payload)
                 self.owner.usage.record("luna", **usage)
+                self.owner.live.model_call(
+                    "luna", usage, self.owner.latest_model_input, phase="strategy"
+                )
             except Exception as exc:
                 detail = str(exc).strip().replace("\n", " ")[:120]
                 suffix = f": {detail}" if detail else ""
                 self.provider_failed(
                     f"Luna strategy unavailable: {type(exc).__name__}{suffix}")
+                self.owner.live.model_call(
+                    "luna", status="error", error=detail, phase="strategy"
+                )
                 return self.options(state, terrain)
             self.target = next(c for c in self.payload["candidates"] if c["id"] == plan["target"])
             self.data["plan"] = plan
@@ -209,9 +222,15 @@ class JourneyStrategy(JourneyPlanning):
             self.target = getattr(self, "local_targets", {}).get(action)
         if not self.target:
             return
+        from .exploration_cycles import evidence
+        self.target.setdefault('evidence_at_start', repr(evidence(self.owner.memory)))
         if (action == self.target.get("direction") and self.target["kind"] == "talk"
                 and self.position == self.target["cell"]):
             self.facing = self.target["id"], action
+            from .field_actions import record_push
+            record_push(self.observations.state, self.data['npcs'][self.target['id']], self.owner.memory, action)
+        if action == 'start' and self.target['kind'] == 'talk':
+            self.field_action.start(self.observations.state, self.data['npcs'][self.target['id']], self.owner.memory)
         if action == "a" and self.target["kind"] == "talk":
             self.observations.interacted(self.target["id"])
         record(self.owner.memory, "decision", action, target=self.target["id"])

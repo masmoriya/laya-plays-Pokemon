@@ -17,8 +17,9 @@ from ...laya_sidecar import _questions
 DEFAULT_URL = "http://127.0.0.1:8765"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
-DEFAULT_TIMEOUT_S = 3.0
-DEFAULT_STARTUP_TIMEOUT_S = 30.0
+DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_HEALTH_TIMEOUT_S = 3.0
+DEFAULT_STARTUP_TIMEOUT_S = 120.0
 _MAX_ATTEMPTS = 2
 _RETRY_DELAY_S = 0.05
 # Laya's confidence is useful telemetry, but the model's calibrated values are
@@ -122,14 +123,20 @@ class LayaProvider:
 
     def health(self):
         try:
-            return self._health_request()
+            return self._check_capabilities(self._health_request())
         except urllib.error.URLError as exc:
             if (self._is_connection_refused(exc) and self._start_local_sidecar()
                     and self._wait_for_sidecar()):
-                return self._health_request()
+                return self._check_capabilities(self._health_request())
             raise RuntimeError(self._unavailable_message(exc)) from exc
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, TimeoutError) as exc:
             raise RuntimeError(self._unavailable_message(exc)) from exc
+
+    @staticmethod
+    def _check_capabilities(payload):
+        if not isinstance(payload, dict) or payload.get("context_packing_version") != 1:
+            raise RuntimeError("Restart the Laya sidecar to enable budgeted journey context")
+        return payload
 
     def close(self):
         """Stop only a sidecar that this provider started for the current run."""
@@ -148,7 +155,7 @@ class LayaProvider:
         request = urllib.request.Request(
             self.url + "/health", headers={"Accept": "application/json"}
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as result:
+        with urllib.request.urlopen(request, timeout=min(self.timeout, DEFAULT_HEALTH_TIMEOUT_S)) as result:
             return json.loads(result.read())
 
     def _start_local_sidecar(self):
@@ -199,7 +206,7 @@ class LayaProvider:
                 return False
             try:
                 payload = self._health_request()
-            except (urllib.error.URLError, json.JSONDecodeError):
+            except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
                 time.sleep(0.1)
                 continue
             return isinstance(payload, dict) and payload.get("status") == "ok"
@@ -242,12 +249,15 @@ class LayaProvider:
                         detail = str(parsed["error"])
                 except json.JSONDecodeError:
                     pass
-                if exc.code >= 500 and attempt + 1 < _MAX_ATTEMPTS:
+                if exc.code >= 500 and exc.code != 503 and attempt + 1 < _MAX_ATTEMPTS:
                     time.sleep(_RETRY_DELAY_S)
                     continue
                 raise RuntimeError(
                     f"Laya sidecar unavailable or malformed: HTTP Error {exc.code}: {detail}"
                 ) from exc
+            except TimeoutError as exc:
+                # A timed-out request can still be executing. Do not enqueue a duplicate.
+                raise RuntimeError(f"Laya inference exceeded {self.timeout:g}s; retry after recovery") from exc
             except (urllib.error.URLError, json.JSONDecodeError) as exc:
                 if (isinstance(exc, urllib.error.URLError)
                         and attempt + 1 == _MAX_ATTEMPTS

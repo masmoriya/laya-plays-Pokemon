@@ -80,3 +80,26 @@ def test_a_tap_keeps_its_scheduled_release_between_frames():
                             in_battle=False)
     assert active is None
     assert emulator.events == [('a', 4)]
+
+
+def test_menu_direction_keeps_its_scheduled_release_between_frames():
+    from jpp.agent.gold97_input import renew_movement
+
+    class Emulator:
+        def __init__(self):
+            self.events = []
+
+        def button(self, button, frames):
+            self.events.append((button, frames))
+
+        def button_release(self, button):
+            self.events.append((button, 'released early'))
+
+    emulator = Emulator()
+    press_action(emulator, 'right', menu=True)
+    active = renew_movement(emulator, 'right', None, overworld=False,
+                            in_battle=True, pressed=True)
+    active = renew_movement(emulator, active, None, overworld=False,
+                            in_battle=True)
+    assert active is None
+    assert emulator.events == [('right', 4)]

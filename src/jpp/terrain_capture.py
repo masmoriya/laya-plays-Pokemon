@@ -1,25 +1,14 @@
 """Capture visible Gold 97 terrain and moving sprites as separate layers."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import numpy as np
 
 from .terrain_tiles import background_tiles
+from .terrain_objects import visible_items as _visible_gold97_items, object_kind
+from .agent.gold97_screen import pc_screen, party_screen
 
 
-# Gold 97 keeps Crystal's map-object layout and shifts this WRAMX block by the
-# five bytes inserted before the map/party data. The map object stores object
-# type and sprite separately, so item balls can be identified without guessing
-# from rendered pixels.
-_GOLD97_MAP_OBJECTS = 0xD723
-_MAP_OBJECT_LENGTH = 16
-_MAP_OBJECT_SPRITE = 1
-_MAP_OBJECT_Y = 2
-_MAP_OBJECT_X = 3
-_MAP_OBJECT_TYPE = 8
-_MAP_OBJECT_STRUCT_ID = 0
-_OBJECTTYPE_ITEMBALL = 1
-_SPRITE_POKE_BALL = 0x54
 
 
 @dataclass(frozen=True)
@@ -95,7 +84,10 @@ def _player_origin(memory, state):
 
 def _overworld_view(emulator, state, *, aligned=True):
     if (getattr(state, "in_battle", False) or not getattr(state, "map_width", 0)
-            or state.x is None or state.y is None):
+            or state.x is None or state.y is None
+            or not (0 <= state.x < state.map_width and 0 <= state.y < state.map_height)):
+        return None
+    if pc_screen(state):
         return None
     memory = emulator.memory
     if not memory[0xC2CE]:  # overworld sprite updates disabled in menus
@@ -119,6 +111,8 @@ def overworld_ready(emulator, state):
 
 def visible_prompt(emulator, state):
     """Require a visible text box before confirming a non-battle screen."""
+    if pc_screen(state):
+        return True
     lines = getattr(state, "screen_lines", ()) or ()
     has_text = any(line.strip() for line in lines[12:])
     has_cursor = (getattr(state, "screen_cursor", None) is not None and
@@ -127,7 +121,32 @@ def visible_prompt(emulator, state):
         return False
     frame = emulator.screen.ndarray
     white = (frame[:, :, :3] > 224).all(axis=2)
+    full_menu = ((has_cursor or has_text) and not emulator.memory[0xC2CE]
+                 if hasattr(emulator, "memory") else False)
+    menu_labels = {line.strip().upper() for line in lines}
+    visible_menu = has_cursor and bool(menu_labels & {'CANCEL', 'YES', 'NO'})
+    if party_screen(state) or full_menu or visible_menu:
+        # Full-screen lists are mostly white, unlike a dialogue overlay.
+        # Require rendered ink so a fade with stale tile RAM is not actionable.
+        return white.mean() < 0.98
     return white[-40:].mean() > 0.55 and white.mean() < 0.65
+
+
+def visible_map_cells(emulator, state, *, partial=False, world_origin=None):
+    """Fully rendered 16px cells in the coherent overworld viewport."""
+    view = _overworld_view(emulator, state, aligned=not partial)
+    if view is None:
+        return ()
+    left, top = view[3]
+    if world_origin is not None:
+        left, top = world_origin[0]/8, world_origin[1]/8
+    if partial:
+        return tuple((x, y) for y in range(state.map_height) for x in range(state.map_width)
+                     if x*2 < left+20 and x*2+2 > left
+                     and y*2 < top+18 and y*2+2 > top)
+    return tuple((x, y) for y in range(state.map_height) for x in range(state.map_width)
+                 if left <= x*2 and x*2+1 < left+20
+                 and top <= y*2 and y*2+1 < top+18)
 
 
 def visible_background(emulator, state, *, world_origin=None):
@@ -149,36 +168,6 @@ def _vram(memory, bank, address):
             pass
     return memory[address]
 
-
-def _wram(memory, address):
-    try:
-        return memory[1, address]
-    except TypeError:
-        return memory[address]
-
-
-def _visible_gold97_items(emulator, state):
-    """Read active item-ball objects close enough to be on the visible map."""
-    if not hasattr(state, "map_group") or state.x is None or state.y is None:
-        return ()
-    map_key = _map_key(state)
-    items = []
-    for index in range(1, 16):
-        base = _GOLD97_MAP_OBJECTS + index * _MAP_OBJECT_LENGTH
-        if (_wram(emulator.memory, base + _MAP_OBJECT_STRUCT_ID) == 0xFF or
-                _wram(emulator.memory, base + _MAP_OBJECT_SPRITE) != _SPRITE_POKE_BALL or
-                _wram(emulator.memory, base + _MAP_OBJECT_TYPE) & 0x0F != _OBJECTTYPE_ITEMBALL):
-            continue
-        x = _wram(emulator.memory, base + _MAP_OBJECT_X) - 4
-        y = _wram(emulator.memory, base + _MAP_OBJECT_Y) - 4
-        if (not 0 <= x < getattr(state, "map_width", 0) or
-                not 0 <= y < getattr(state, "map_height", 0) or
-                abs(x - state.x) > 10 or abs(y - state.y) > 9):
-            continue
-        items.append(OverworldSprite(
-            key=f"item:{map_key}:{index}", map_key=map_key,
-            pixel_x=x * 16, pixel_y=y * 16, rgba=bytes(1024), kind="item"))
-    return tuple(items)
 
 
 def visible_entities(emulator, state, *, world_origin=None):
@@ -219,9 +208,13 @@ def visible_entities(emulator, state, *, world_origin=None):
         for identity, x, y in objects:
             nearby = min(entities, key=lambda e: abs(e.pixel_x-x*16)+abs(e.pixel_y-y*16), default=None)
             rgba = nearby.rgba if nearby and abs(nearby.pixel_x-x*16)+abs(nearby.pixel_y-y*16) <= 24 else bytes(1024)
-            canonical.append(OverworldSprite(identity, _map_key(state), x*16, y*16, rgba, kind='npc'))
+            kind = object_kind(memory, state, identity)
+            canonical.append(OverworldSprite(identity, _map_key(state), x*16, y*16, rgba, kind=kind))
         entities = canonical
-    items = _visible_gold97_items(emulator, state)
+    visible_cells = set(visible_map_cells(emulator, state, partial=True, world_origin=world_origin))
+    entities = [e for e in entities if (e.pixel_x//16, e.pixel_y//16) in visible_cells]
+    items = tuple(e for e in _visible_gold97_items(emulator, state)
+                  if (e.pixel_x//16, e.pixel_y//16) in visible_cells)
     item_cells = {(e.pixel_x, e.pixel_y) for e in items}
     entities = [e for e in entities if (e.pixel_x, e.pixel_y) not in item_cells]
     entities.extend(items)

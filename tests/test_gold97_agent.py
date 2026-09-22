@@ -197,7 +197,7 @@ def test_trainer_level_up_moves_to_replacement_instead_of_confirming_ember(tmp_p
         controller.close()
 
 
-def test_unreadable_level_up_menu_pauses_instead_of_deleting_a_move(tmp_path):
+def test_unknown_level_up_offer_cancels_instead_of_deleting_a_move(tmp_path):
     controller = Gold97Controller("run", database=tmp_path / "agent.sqlite",
                                   vision_enabled=False)
     try:
@@ -210,9 +210,8 @@ def test_unreadable_level_up_menu_pauses_instead_of_deleting_a_move(tmp_path):
         state.battle_menu_kind = "text"
         state.screen_lines = ("EMBER", "SCRATCH", "SAND ATTACK", "GROWL", "CANCEL")
         state.screen_cursor = (1, 0)
-        assert controller.step(state) is None
-        assert controller.paused
-        assert "missing its move" in controller.pause_reason
+        assert controller.step(state) == "b"
+        assert not controller.paused
     finally:
         controller.close()
 
@@ -285,12 +284,14 @@ def test_center_exit_transition_does_not_close_a_loading_room(tmp_path):
 
 
 def test_capture_switches_from_items_to_balls_without_using_potion(tmp_path):
+    from jpp.decode import Mon
     controller = Gold97Controller("run", database=tmp_path / "agent.sqlite",
                                   vision_enabled=False)
     try:
-        foe = SimpleNamespace(species="FLAMBEAR", species_id=155, hp=12)
+        foe = Mon(0, 'FLAMBEAR', 5, 12, 20, 'none', ('FIRE',), species_id=155)
         state = _state(battle="wild", foe=foe)
-        state.party = (SimpleNamespace(species_id=152, hp=25, max_hp=30),)
+        state.party = tuple(Mon(i, 'KOTORA', 16, 30, 30, 'none', ('ELECTRIC',),
+                                moves=('TACKLE',), pp=(30,), species_id=152) for i in (1, 2))
         state.poke_ball_count = 3
         state.battle_menu_kind = "text"
         state.battle_menu_cursor = None
@@ -372,8 +373,7 @@ def test_room_transition_without_dialogue_does_not_press_a(tmp_path):
         usage_provider = "laya"
 
         def decide_tactical(self, state, options):
-            assert options == {"a": "advance current dialogue"}
-            return {"action": "a"}
+            raise AssertionError("single-option dialogue must execute locally")
 
     controller = Gold97Controller(
         "run", database=tmp_path / "agent.sqlite",
@@ -402,9 +402,34 @@ def test_room_transition_without_dialogue_does_not_press_a(tmp_path):
         assert controller.cooldown == 0
 
         state.screen_lines = ("",) * 14 + ("Please come in",) + ("",) * 3
-        assert controller.step(state, overworld=False) is None
-        controller.decision_future.result(timeout=1)
-        assert controller.step(state, overworld=False) == "a"
+        # Even if stale map state says overworld, the rendered prompt owns the
+        # controls and advances deterministically.
+        assert controller.step(
+            state, overworld=True, prompt_visible=True,
+        ) == "a"
+        assert controller.decision_future is None
+    finally:
+        controller.close()
+
+
+def test_visible_dialogue_preempts_supply_navigation(tmp_path, monkeypatch):
+    controller = Gold97Controller(
+        "run", database=tmp_path / "agent.sqlite", vision_enabled=False,
+    )
+    try:
+        state = _state()
+        state.screen_lines = ("",) * 14 + ("Help!",) + ("",) * 3
+        controller.unknown_frames = 8
+        monkeypatch.setattr(
+            controller, "_shopping_action",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("shopping must not run behind dialogue")
+            ),
+        )
+        assert controller.step(
+            state, overworld=False, prompt_visible=True,
+        ) == "a"
+        assert controller.held_action is None
     finally:
         controller.close()
 
@@ -469,6 +494,37 @@ def test_laya_health_check_gates_autonomous_movement(tmp_path):
         assert controller.provider_health == "checking"
         assert controller.step(state, overworld=True) is None
         assert controller.held_action is None
+        assert controller.decision_future is None
+    finally:
+        release_health.set()
+        controller.close()
+
+
+def test_laya_health_check_does_not_block_local_dialogue(tmp_path):
+    release_health = Event()
+
+    class SlowLaya:
+        usage_provider = "laya"
+
+        def health(self):
+            release_health.wait(timeout=1)
+            return {"status": "ok"}
+
+        def decide_tactical(self, state, options):
+            raise AssertionError("single-option dialogue must not call Laya")
+
+    controller = Gold97Controller(
+        "run", database=tmp_path / "agent.sqlite",
+        policy=ProviderPolicy(SlowLaya()), vision_enabled=False,
+    )
+    try:
+        state = _state()
+        state.screen_lines = ("",) * 14 + ("Help!",) + ("",) * 3
+        controller.unknown_frames = 8
+        assert controller.provider_health == "checking"
+        assert controller.step(
+            state, overworld=False, prompt_visible=True,
+        ) == "a"
         assert controller.decision_future is None
     finally:
         release_health.set()
@@ -644,7 +700,7 @@ def test_movement_hold_replans_immediately_after_tile_lands(tmp_path):
         assert controller.held_action == "up"
         state.y -= 1
         controller._observe_move(state)
-        assert controller.held_action == "up"
+        assert controller.held_action is None
         assert controller.cooldown == 0
     finally:
         controller.close()
@@ -757,7 +813,7 @@ def test_luna_only_after_unknown_screen_trigger(tmp_path):
         controller.close()
 
 
-def test_live_footer_exposes_opt_in_play_and_pause():
+def test_live_agent_panel_exposes_opt_in_play_and_pause():
     import os
     import pygame
 
@@ -767,9 +823,12 @@ def test_live_footer_exposes_opt_in_play_and_pause():
     pygame.init()
     try:
         ui = LiveUI(pygame.display.set_mode(SIZE))
-        ui._footer({"jev_available": True, "jev_auto": False})
+        from jpp.character.animation import Animation
+        ui._thoughts({"jev": []}, Animation(),
+                     {"jev_available": True, "control_mode": "human"})
         assert "toggle_jev" in ui.actions
-        ui._footer({"jev_available": True, "jev_auto": True})
+        ui._thoughts({"jev": []}, Animation(),
+                     {"jev_available": True, "control_mode": "ai"})
         assert "toggle_jev" in ui.actions
     finally:
         pygame.quit()
@@ -807,7 +866,7 @@ def test_wild_faint_selects_stronger_replacement_and_keeps_fighting(tmp_path):
         controller.close()
 
 
-def test_failed_escape_commits_to_battle(tmp_path):
+def test_failed_escape_does_not_commit_to_fighting(tmp_path):
     controller = Gold97Controller('escape', database=tmp_path / 'agent.sqlite',
                                   vision_enabled=False)
     st = _state(battle='wild', foe=SimpleNamespace(species='RATTATA', species_id=19))
@@ -822,5 +881,6 @@ def test_failed_escape_commits_to_battle(tmp_path):
         controller.cooldown = 0
         assert controller.step(st, overworld=False) == 'a'
         assert len(calls) == 2
+        assert not controller.wild_battle_committed
     finally:
         controller.close()

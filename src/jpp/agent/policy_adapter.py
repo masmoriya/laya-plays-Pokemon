@@ -11,7 +11,7 @@ class ProviderPolicy:
         self.fallback = fallback
 
     def decide(self, branch, forced=False):
-        fallback, reason = default_option(branch)
+        fallback, _ = default_option(branch)
         if forced:
             return Decision(option=fallback, fell_back=True, reason="stuck safety cap")
         started = time.monotonic()
@@ -39,6 +39,6 @@ class ProviderPolicy:
             return Decision(
                 option=fallback,
                 fell_back=True,
-                reason=f"{type(exc).__name__}: {exc}; {reason}",
+                reason=f"{type(exc).__name__}: {exc}",
                 latency_ms=round((time.monotonic() - started) * 1000, 1),
             )

@@ -59,3 +59,16 @@ def test_collision_cache_refreshes_a_stale_grid_after_a_map_warp():
     state.in_battle = False
     assert cache.update(emulator, state).allows((2, 0), "right")
     assert not cache.ready
+
+
+def test_cache_refreshes_even_when_stale_map_has_one_open_neighbor(monkeypatch):
+    old = Gold97CollisionMap((4,5),4,4,bytes([0]*16))
+    changed = Gold97CollisionMap((4,5),4,4,bytes([7]*8+[0]*8))
+    current = [old]
+    monkeypatch.setattr(Gold97CollisionMap,'from_emulator',lambda e,s:current[0])
+    s = SimpleNamespace(map_group=4,map_number=5,x=1,y=2,in_battle=False)
+    cache = Gold97CollisionCache(refresh_frames=2)
+    for _ in range(3):
+        assert cache.update(None,s) == old
+    current[0] = changed
+    assert cache.update(None,s) == changed

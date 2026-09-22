@@ -91,3 +91,27 @@ def test_real_pc_withdraw_reorder_and_cross_box_deposit(tmp_path):
         assert transfer.completed
         assert {m.identity for m in state.party}=={m.identity for m in initial.party}
     finally:emulator.stop(save=False)
+
+
+@pytest.mark.skipif(not os.getenv('GOLD97_HEAL_STATE'), reason='provide GOLD97_HEAL_STATE at Potion USE popup')
+def test_real_potion_popup_returns_to_battle_commands(tmp_path):
+    emulator, adapter = load(tmp_path, os.environ['GOLD97_HEAL_STATE'])
+    executor = BattleExecutor()
+    owner = NS(battle_strategy=Gold97BattleStrategy(), battle_target=None,
+               battle_switch_phase=None, paused=False)
+    owner._set_provider_event = lambda text: None
+    owner.pause = pytest.fail
+    initial = adapter.snapshot(emulator).state
+    try:
+        for tick in range(500):
+            state = adapter.snapshot(emulator).state
+            if (tick > 10 and state.battle_menu_kind == 'command'
+                    and state.potion_count < initial.potion_count):
+                return
+            button = executor.step(owner, state)
+            if button:
+                press_action(emulator, button, menu=True)
+            emulator.tick(45, True)
+        pytest.fail('Potion did not finish and return to battle')
+    finally:
+        emulator.stop(save=False)

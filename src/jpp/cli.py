@@ -247,8 +247,14 @@ def cmd_overlay(args):
 
 
 def main(argv=None):
+    import sys
+    incoming = list(sys.argv[1:] if argv is None else argv)
+    if incoming and incoming[0] == "universal":
+        from .universal import main as universal_main
+        return universal_main(incoming[1:])
     parser = argparse.ArgumentParser(prog="jpp")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("universal", help="play a managed GB/GBC save with the local vision runtime")
 
     from .live import add_parser as add_live_parser
 

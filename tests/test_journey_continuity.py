@@ -138,15 +138,29 @@ def test_route_102_does_not_send_cut_journey_back_to_pagota(owner):
                for c in candidates(s, owner.memory, terrain))
 
 
-def test_unchanged_dialogue_cannot_confirm_forever():
+def test_unchanged_dialogue_keeps_confirming_forward_without_cancel():
     progress = DialogueProgress()
     s = state()
     s.screen_lines = ('There is nothing here.',)
-    assert [progress.advance(s) for _ in range(7)] == ['a'] * 4 + ['b', 'b', None]
+    assert [progress.advance(s) for _ in range(7)] == ['a'] * 7
     s.screen_lines = ('A new page.',)
     assert progress.advance(s) == 'a'
     progress.reset()
     assert progress.attempts == 0
+
+
+def test_dialogue_uses_rendered_textbox_to_detect_an_unchanged_frame():
+    import numpy as np
+
+    progress = DialogueProgress()
+    s = state()
+    frame = np.zeros((144, 160, 4), dtype=np.uint8)
+    assert progress.advance(s, frame) == 'a'
+    assert progress.advance(s, frame.copy()) == 'a'
+    assert progress.attempts == 2
+    frame[-1, -1, 0] = 1
+    assert progress.advance(s, frame) == 'a'
+    assert progress.attempts == 1
 
 
 def test_departure_is_offered_without_exhausting_npcs_or_tiles(owner):

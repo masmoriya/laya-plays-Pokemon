@@ -8,6 +8,18 @@ PLAYER_STAGES = 0xC6CC
 ENEMY_STAGES = 0xC6D4
 
 
+def battle_restrictions(mem, kind, verified):
+    """Pinned core.asm TryToRunAwayFromBattle and BattleMenuPKMN checks."""
+    if not verified or kind == 'none':
+        return None, None
+    trapped = bool(mem[0xC671] & 0x80 or mem[0xC730])
+    battle_type = mem[0xD230]
+    # Debug and contest allow fleeing before checking trapping effects.
+    escape = (battle_type in {2, 6} or
+              (kind == 'wild' and battle_type not in {7, 9, 11, 12} and not trapped))
+    return escape, not trapped
+
+
 _TYPE_NAMES = (
     "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BIRD", "BUG",
     "DRAGON", "DARK", "STEEL", *("UNKNOWN",) * 10,

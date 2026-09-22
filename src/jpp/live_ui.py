@@ -6,7 +6,7 @@ from .character.sprites import JevSprites
 from .journey_art import JourneyArt
 from .journey_timeline import JourneyTimeline
 from .live_panels import LivePanels
-from .live_activity import collapse_repeated, format_model_input
+from .live_agent_panel import LiveAgentPanel
 from .live_map_state import LiveMapState
 from .live_strategy import controls as strategy_controls
 from .live_notebook import NotebookPanel
@@ -70,15 +70,15 @@ class LiveUI:
         self.strategy_details = False
         self.strategy_summary = None
         self.notebook = NotebookPanel()
+        self.agent_panel = LiveAgentPanel(self, LEFT)
         self.map_mode = "grid"
         self.map_state = LiveMapState()
         self.map_entities = ()
         self.actions = {}
         self.selected_optional = None
         self.activity_scroll = 0
-        self.show_model_input = False
-        self.activity_bounds = pygame.Rect(LEFT.x + 14, LEFT.y + 150,
-                                           LEFT.width - 28, LEFT.height - 286)
+        self.show_feed = False
+        self.activity_bounds = self.agent_panel.feed_bounds
         self._dest = pygame.Rect(0, 0, *SIZE)
 
     def draw(self, frame, progress, state, animation, thoughts, journey=None, battle=None):
@@ -98,6 +98,7 @@ class LiveUI:
         self._footer(progress, thoughts)
         if self.show_shortcuts:
             self._shortcuts()
+        self.notebook.update(progress)
         self.notebook.draw(self)
         width, height = self.screen.get_size()
         scale = min(width / SIZE[0], height / SIZE[1])
@@ -123,8 +124,8 @@ class LiveUI:
             return
         x = (pos[0] - self._dest.x) * SIZE[0] / self._dest.width
         y = (pos[1] - self._dest.y) * SIZE[1] / self._dest.height
-        if self.activity_bounds.collidepoint(x, y):
-            delta = -steps * 3 if self.show_model_input else steps * 3
+        if self.show_feed and self.activity_bounds.collidepoint(x, y):
+            delta = steps * 3
             self.activity_scroll = max(0, self.activity_scroll + delta)
 
     def button(self, name, label, rect, color=TEXT):
@@ -177,73 +178,10 @@ class LiveUI:
         self.canvas.blit(pygame.transform.scale(image, GAME_RECT.size), GAME_RECT)
 
     def _thoughts(self, thoughts, animation, progress):
-        pygame.draw.rect(self.canvas, PANEL, LEFT, border_radius=6)
-        tactical_key = progress.get("tactical_provider", "jev")
-        tactical_label = progress.get("tactical_label", tactical_key.title())
-        tactical_status = progress.get("tactical_status")
-        if tactical_status is None:
-            tactical_status = "live" if progress.get(
-                "tactical_connected", progress.get("jev_connected")
-            ) else "not_connected"
-        status_label = {
-            "live": "Connected · playing",
-            "ready": "Connected · paused",
-            "checking": "Checking",
-            "unavailable": "Unavailable",
-            "not_connected": "Not connected",
-        }.get(tactical_status, "Not connected")
-        if progress.get('play_requested'):
-            status_label = progress.get('playback_status', 'playing').capitalize()
-        status_color = GOOD if tactical_status == "live" else MUTED
-        self.text(tactical_label, (LEFT.x + 14, LEFT.y + 14), self.small, GOOD)
-        self.text(status_label, (LEFT.x + 75, LEFT.y + 14), self.small, status_color)
-        if progress.get("strategy"):
-            strategy = progress["strategy"]
-            self.text(f"Luna {strategy['status']} · {progress.get('action_source', 'idle')}",
-                      (LEFT.x + 14, LEFT.y + 32), self.tiny, MUTED)
-        model_input = progress.get("model_input")
-        if not model_input:
-            self.show_model_input = False
-        self._usage(progress.get("model_usage"), progress.get("tactical_provider", "jev"),
-                    has_model_input=bool(model_input))
-        entries = [entry for entry in (thoughts.get(tactical_key) or thoughts.get("jev") or [])
-                   if entry != "Snapshot saved."]
-        if self.show_model_input:
-            self._entries(format_model_input(model_input), self.activity_bounds.top,
-                          self.activity_bounds.bottom, from_top=True)
-        else:
-            self._entries(collapse_repeated(entries), self.activity_bounds.top,
-                          self.activity_bounds.bottom)
-        # Her avatar belongs to its own dock; it never steals commentary width.
-        self.jev_sprites.draw(self.canvas, getattr(animation.state, "value", "idle"),
-                              animation.frame(), pygame.Rect(LEFT.right - 104, LEFT.bottom - 124, 88, 108))
+        self.agent_panel.draw(thoughts, animation, progress)
 
     def _usage(self, model_usage, tactical_provider="jev", *, has_model_input=False):
-        self.text("Usage · completed requests", (LEFT.x + 14, LEFT.y + 46), self.tiny, MUTED)
-        if has_model_input:
-            label = "Feed" if self.show_model_input else "Input"
-            self.button("model_input", label,
-                        pygame.Rect(LEFT.right - 68, LEFT.y + 39, 54, 20), MUTED)
-        usage = model_usage or {}
-        stats = usage.get(tactical_provider) or {}
-        top = LEFT.y + 65
-        calls = stats.get("calls", 0)
-        self.text(f"{tactical_provider.title()} {calls} calls · "
-                      f"{format_tokens(stats.get('input_tokens'))} in / "
-                      f"{format_tokens(stats.get('output_tokens'))} out",
-                  (LEFT.x + 14, top), self.tiny, GOOD, max_width=LEFT.width - 28)
-        rate = stats.get("tokens_per_second")
-        actual = stats.get("actual_cost_usd")
-        estimate = stats.get("estimated_cost_usd")
-        cost = (f"${actual:.6f} actual" if actual is not None else
-                f"${estimate:.6f} est" if estimate is not None else "cost unavailable")
-        self.text(f"{f'{rate:g} tok/s' if rate is not None else 'rate unavailable'} · {cost}",
-                  (LEFT.x + 14, top + 18), self.tiny, MUTED, max_width=LEFT.width - 28)
-        other = usage.get("luna") or {}
-        self.text(f"Luna {other.get('calls', 0)} calls · "
-                  f"{format_tokens(other.get('input_tokens'))} in / "
-                  f"{format_tokens(other.get('output_tokens'))} out",
-                  (LEFT.x + 14, top + 40), self.tiny, TEXT, max_width=LEFT.width - 28)
+        self.agent_panel._usage(model_usage, tactical_provider, LEFT.y + 43)
 
     def _entries(self, entries, top, bottom, *, from_top=False):
         lines = []
@@ -269,10 +207,6 @@ class LiveUI:
                     ("restart", "Restart", 266, 76),
                     ("game_save", "Save help", 350, 84),
                     ("toggle_audio", "Unmute" if self.audio_muted else "Mute", 442, 72))
-        if progress.get("tactical_available", progress.get("jev_available")):
-            label = progress.get("tactical_label", "Jev")
-            controls += (("toggle_jev", f"Pause {label}" if progress.get("play_requested", progress.get("tactical_auto", progress.get("jev_auto"))) else f"Play {label}",
-                          910, 94),)
         for action, label, x, width in controls:
             self.button(action, label, pygame.Rect(x, 1026, width, 30),
                         ACCENT if action == "snapshot" else TEXT)
@@ -292,7 +226,7 @@ class LiveUI:
         lines = ("Keyboard", "Arrows move     Z A     X B     Enter Start     Shift Select",
                  "Ctrl-S snapshot     Ctrl-R restore     Ctrl-L play/pause Laya",
                  "V mute audio     C confirm stage     U undo stage     O side stop",
-                 "- / + speed     0 reset speed     Esc quit")
+                 "- / + speed     1/2/4/8 select speed     0 reset     Esc quit")
         for index, line in enumerate(lines):
             self.text(line, (box.x + 18, box.y + 16 + index * 32),
                       self.body if index == 0 else self.small, ACCENT if index == 0 else TEXT)

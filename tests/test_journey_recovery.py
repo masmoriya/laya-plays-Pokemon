@@ -29,16 +29,15 @@ def test_exhausted_leads_retry_oldest_and_preserve_failures(controller):
     assert controller.route.now == 6
 
 
-def test_known_ground_is_revisited_when_no_other_leads_remain(controller):
+def test_exhausted_known_ground_stops_instead_of_wandering(controller):
     strategy = controller.strategy
     s = state()
     strategy.observe(s, (), True)
     terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
     controller.memory.map('09:02')['visited'] = [[x, y] for x in range(6) for y in range(6)]
     assert not candidates(s, controller.memory, terrain)
-    assert strategy.options(s, terrain)
-    target = strategy.payload['candidates'][0]
-    assert target['kind'] == 'explore'
-    assert target['cell'] != [s.x, s.y]
+    assert not strategy.options(s, terrain)
+    assert strategy.status == 'blocked'
+    assert 'No untried reachable' in strategy.summary()['next']
     assert not controller.paused
     assert controller.route.now == 6

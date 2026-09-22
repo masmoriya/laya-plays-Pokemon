@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 from .decode import Battle, Mon
 from .agent.gold97_mechanics import compatible
-from .gold97_battle_state import decode_mon
+from .gold97_battle_state import decode_mon, battle_restrictions
 from .gold97_data import Gold97RomData, _decode_name
 from .gold97_catalog import map_details
+from .gold97_movement import player_destination
 from .agent.gold97_screen import battle_menu, cursor_cell, visible_rows, _party_cursor
 
 
@@ -142,6 +143,15 @@ class Gold97State:
     box_names: tuple = ()
     battle_participants: int | None = None
     overworld_objects: tuple | None = None
+    player_facing: str | None = None
+    player_moving: bool = False
+    player_next_position: tuple[int, int] | None = None
+    route_103_slowpoke_cleared: bool | None = None
+    story_milestones: tuple[int, ...] = ()
+    escape_allowed: bool | None = None
+    switch_allowed: bool | None = None
+    owned_hms: tuple[str, ...] = ()
+    strength_active: bool | None = None
 
     @property
     def in_battle(self) -> bool:
@@ -253,6 +263,8 @@ class Gold97Adapter:
         ball_count = _inventory_quantity(mem, BALLS, NUM_BALLS, POKE_BALL_ID)
         from .gold97_world import active_objects
         from .gold97_exits import map_exits
+        from .gold97_story import story_milestones
+        from .field_moves import HM_NAMES
         from .gold97_storage import storage
         # SRAM is sampled only outside battles; cache the stable roster during combat.
         if self.mechanics_verified and kind == 'none':
@@ -306,7 +318,27 @@ class Gold97Adapter:
             box_names=tuple(_decode_name(
                 bytes(mem[0xDB79 + i * 9 + j] for j in range(9))) for i in range(14)) if self.mechanics_verified else (),
             battle_participants=mem[0xC664] & 63 if self.mechanics_verified and kind != 'none' else None,
+            escape_allowed=battle_restrictions(mem, kind, self.mechanics_verified)[0],
+            switch_allowed=battle_restrictions(mem, kind, self.mechanics_verified)[1],
             overworld_objects=active_objects(mem, width, height) if self.mechanics_verified and kind == 'none' else None,
+            # Player object at D4D6: OBJECT_FACING +08; next/current XY +10/+12.
+            # Read-only native pose avoids inferring facing from sent inputs.
+            player_facing=({0: 'down', 4: 'up', 8: 'left', 12: 'right'}.get(mem[0xD4DE])
+                           if self.mechanics_verified and kind == 'none' else None),
+            player_moving=(any(mem[0xD4E6 + i] != mem[0xD4E8 + i] for i in range(2))
+                           if self.mechanics_verified and kind == 'none' else False),
+            player_next_position=(player_destination(mem, width, height)
+                                  if self.mechanics_verified and kind == 'none' else None),
+            # EVENT_BEAT_WHITNEY = 1221, wEventFlags = DA72 in v6.1c.
+            # Route103's two Slowpoke objects use this exact disappearance flag.
+            route_103_slowpoke_cleared=(bool(mem[0xDB0A] & 0x20)
+                                       if self.mechanics_verified else None),
+            # wTMsHMs=D859, NUM_TMS=50; exact-build persistent HM quantities.
+            owned_hms=tuple(name for i, name in enumerate(HM_NAMES)
+                if self.mechanics_verified and mem[0xD859 + 50 + i]),
+            # SetStrengthFlag at ROM CD66: ld hl,DBF9; set 0,[hl].
+            strength_active=bool(mem[0xDBF9] & 1) if self.mechanics_verified else None,
+            story_milestones=story_milestones(mem, self.mechanics_verified, (group, number)),
         )
         return SimpleNamespace(
             state=state, badge_update=None, title=self.title, supports_ram_progress=True

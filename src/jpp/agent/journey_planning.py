@@ -6,9 +6,27 @@ from .experience import target_key
 
 
 class JourneyPlanning:
+    def reconsider_obstacle(self, state, terrain, durable):
+        if not self.target or self.target.get('category') != 'obstacle':
+            return
+        available = candidates(state, self.owner.memory, terrain,
+                               excluded=self.excluded | durable,
+                               reward_weights=self.owner.rewards.weights)
+        current_reward = next((target.get('journey_reward', 0) for target in available
+                               if target['id'] == self.target['id']), 0)
+        direct = next((target for target in available if target['kind'] == 'talk'
+                       and target.get('category') != 'obstacle'
+                       and target.get('journey_reward', 0) > current_reward), None)
+        if direct:
+            self.invalidate()
+            self.target, self.status = direct, 'ready'
+            self.data['plan'] = {'target': direct['id'], 'explanation': direct['label'],
+                                 'completion': direct['completion'], 'evidence': [direct['id']]}
+
     def plan_next(self, state, terrain, durable):
         if monotonic() < self.recovery_retry_at:
             return {}
+        recovering = False
         available = candidates(
             state, self.owner.memory, terrain, excluded=self.excluded | durable,
             reward_weights=self.owner.rewards.weights,
@@ -32,22 +50,62 @@ class JourneyPlanning:
             )
         if not available:
             available = self.recovery_candidates(state, terrain)
+            recovering = bool(available)
         if not available:
             # Keep observing and retry transient obstacles without spinning
             # model requests or requiring a manual resume.
             self.recovery_retry_at = monotonic() + 2
             self.rechecked_positions.discard(retry_key)
-            self.status = "recovering"
-            self.owner._set_provider_event("Rechecking reachable routes for the journey")
+            from .object_memory import obstruction_summary
+            self.status = "blocked"
+            self.owner._set_provider_event(obstruction_summary(self.data, key))
             return {}
+        local = [t for t in available if not t.get('landing_return')]
+        if local:
+            available = local
+        investigations = [t for t in available if t.get('investigation_priority')]
+        if investigations:
+            available = investigations
+        interactions = [t for t in available if t.get('goal_interaction')]
+        if interactions:
+            available = interactions
+        available = self.prioritize_forward_routes(available)
+        useful = [target for target in available if target.get('journey_reward', 0) > 0]
+        if useful:
+            available = useful
+        if all(t.get("recent_return") for t in available):
+            # Historical failures must not leave the just-used door as the
+            # sole perpetual choice. Recheck an older local lead first.
+            alternatives = self.recovery_candidates(state, terrain)
+            forward = [t for t in alternatives
+                       if t.get("destination_key") != self.arrived_from]
+            if forward:
+                available = self.prioritize_forward_routes(forward)
+                recovering = True
+        forward = [t for t in available if not t.get("recent_return")]
+        if forward:
+            available = forward
         self.payload = self.context(state)
         self.payload["candidates"] = available
         milestone_reward = self.owner.rewards.weights["milestone"]
-        runner_up = available[1].get("journey_reward", 0) if len(available) > 1 else -1
-        if (available[0].get('goal_destination')
-                and available[0].get("journey_reward", 0) >= milestone_reward
-                and runner_up < available[0]["journey_reward"]):
-            self.target = available[0]
+        top = available[0]
+        top_choice = (("exit", top.get("destination_key"))
+                      if top.get("kind") == "exit" and top.get("destination_key")
+                      else ("target", top["id"]))
+        runner_up = next((target.get("journey_reward", 0) for target in available[1:]
+                          if (("exit", target.get("destination_key"))
+                              if target.get("kind") == "exit" and target.get("destination_key")
+                              else ("target", target["id"])) != top_choice), -1)
+        top_priority = (
+            top.get('investigation_priority') or top.get('prerequisite') or top.get('goal_route')
+            or top.get('reobserve_interaction')
+            or (top.get("route_frontier") and not recovering)
+            or ((top.get('goal_destination') or top.get('goal_interaction'))
+                and top.get("journey_reward", 0) >= milestone_reward)
+        )
+        if (top_priority
+                and runner_up < top["journey_reward"]):
+            self.target = top
             self.status = "ready"
             self.data["plan"] = {"target": self.target["id"],
                                  "explanation": self.target["label"],
@@ -87,6 +145,25 @@ class JourneyPlanning:
                 self.local_targets.setdefault(action, target)
         return options
 
+    def prioritize_forward_routes(self, available):
+        """Make a just-used doorway less valuable while alternatives exist."""
+        source = getattr(self, "arrived_from", None)
+        if not source:
+            return available
+        milestone = self.owner.rewards.weights["milestone"]
+        prioritized = []
+        for target in available:
+            if (target.get('prerequisite') or target.get('goal_route') or target.get("kind") != "exit"
+                    or target.get("destination_key") != source):
+                prioritized.append(target)
+                continue
+            target = {**target, "recent_return": True,
+                      "journey_reward": max(0, target.get("journey_reward", 0) - milestone)}
+            reason = target.get("reward_reason", "")
+            target["reward_reason"] = (reason + "; " if reason else "") + "immediate return to the map just left"
+            prioritized.append(target)
+        return sorted(prioritized, key=lambda target: -target.get("journey_reward", 0))
+
 
     def recovery_candidates(self, state, terrain):
         """Reconsider observed leads after alternatives are exhausted."""
@@ -102,19 +179,4 @@ class JourneyPlanning:
                          if attempted.get(target_key(t), 0) == oldest]
             record(self.owner.memory, "route_recheck", available[0]["label"])
             return available
-        # Revisit reachable ground to refresh observations when all tiles are
-        # known. Collision data and visible sprites still constrain BFS.
-        key = f"{state.map_group:02X}:{state.map_number:02X}"
-        reachable = paths(state, self.owner.memory, terrain)
-        cells = [cell for cell in reachable if cell != (state.x, state.y)]
-        if not cells:
-            return []
-        def priority(cell):
-            target = {"map": key, "kind": "explore", "cell": list(cell), "direction": ""}
-            return (attempted.get(target_key(target), 0),
-                    -abs(cell[0] - state.x) - abs(cell[1] - state.y))
-        cell = min(cells, key=priority)
-        return [{"id": f"explore:{key}:{cell}", "kind": "explore",
-                 "cell": list(cell), "direction": "", "map": key,
-                 "label": "Recheck the area for a route onward",
-                 "completion": "Reach the target tile"}]
+        return []

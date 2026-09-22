@@ -28,7 +28,7 @@ BRASS_TOWER_ROOF = (14, 10)
 _MAP_COMPLETIONS = {4: BRASS_TOWER_ROOF}
 _ARRIVALS = {
     1: "Silent Town", 3: "Pagota City",
-    9: "Westport City", 17: "Birdon Town", 23: "Sunpoint City",
+    9: "Westport City", 11: "Teknos City", 17: "Birdon Town", 23: "Sunpoint City",
     31: "Alloy City", 38: "Blue Forest", 43: "Stand City",
     61: "Kanto", 87: "Westport Docks", 94: "Amami Town",
     97: "Ryukyu City", 99: "Kume City",
@@ -40,6 +40,7 @@ class RouteProgress:
     completed: set[int] = field(default_factory=set)
     optional_completed: set[str] = field(default_factory=set)
     manual_history: list[int] = field(default_factory=list)
+    field_moves: list[dict] = field(default_factory=list, init=False, repr=False)
 
     @property
     def now(self):
@@ -52,6 +53,9 @@ class RouteProgress:
         if (getattr(state, "area_name", "") in {"Route 101", "Silent Hills", "Pagota City"}
                 and getattr(state, "party", ())):
             self.completed.update((1, 2))
+        if getattr(state, "mechanics_verified", False):
+            self.completed.update(step for step in getattr(state, "story_milestones", ())
+                                  if step in {1, 2, 3, 4, 9, 11, 12, 13, 14})
         badges = len(getattr(state, "badge_ids", ()))
         if getattr(state, "received_cut_from_bill", False):
             self.completed.add(6)
@@ -70,6 +74,9 @@ class RouteProgress:
         for step, target in _ARRIVALS.items():
             if target == area or (target == "Kanto" and "Kanto" in area):
                 self.completed.add(step)
+
+        from .field_moves import capabilities
+        self.field_moves = capabilities(state, self.now)
 
     def confirm(self):
         step = self.now
@@ -107,6 +114,7 @@ class RouteProgress:
             "later": (later, MAIN[later]) if later is not None else None,
             "optional": optional,
             "done": len(self.completed), "total": len(MAIN),
+            "field_moves": self.field_moves,
         }
 
     def to_dict(self):
@@ -117,6 +125,10 @@ class RouteProgress:
     @classmethod
     def from_dict(cls, payload):
         payload = payload or {}
-        return cls({int(i) for i in payload.get("completed", ()) if int(i) in MAIN},
-                   set(payload.get("optional_completed", ())),
-                   [int(i) for i in payload.get("manual_history", ()) if int(i) in MAIN])
+        completed = {int(i) for i in payload.get("completed", ()) if int(i) in MAIN}
+        manual = [int(i) for i in payload.get("manual_history", ()) if int(i) in MAIN]
+        # The cartridge initializes this warning flag before the rescue. Older
+        # readers mistook it for the later return-to-Teknos story event.
+        if 12 not in completed and 13 not in manual:
+            completed.discard(13)
+        return cls(completed, set(payload.get("optional_completed", ())), manual)

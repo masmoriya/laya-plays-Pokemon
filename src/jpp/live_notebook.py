@@ -1,72 +1,104 @@
-"""Searchable notebook overlay, isolated from emulator keyboard controls."""
+"""Agent inspector state and actions, isolated from emulator keyboard controls."""
 
 import pygame
 
-from .agent.notebook import notebook, text_lines
-from .live_ui_colors import BG, MUTED, TEXT
+from .agent.notebook import notebook
+from .live_inspector_views import draw_inspector
 
 
 class NotebookPanel:
+    """Backward-compatible name for the Guide/Context/Vision/Notes inspector."""
+
     def __init__(self):
         self.open = False
-        self.view = 'Now'
-        self.query = ''
+        self.view = "Notes"
+        self.notes_view = "Now"
+        self.query = ""
+        self.composer = ""
         self.page = 0
         self.data = None
+        self.progress = {}
+        self.provider = "laya"
+        self.raw_context = False
+        self.call_index = -1
+
+    def update(self, progress):
+        self.progress = progress or {}
 
     def handle(self, event):
         if not self.open or event.type not in (pygame.KEYDOWN, pygame.KEYUP):
             return False
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                self.open = False
-            elif event.key == pygame.K_BACKSPACE:
-                self.query = self.query[:-1]
-            elif getattr(event, 'unicode', '').isprintable():
-                self.query = (self.query + event.unicode)[:120]
-            self.page = 0
+        if event.type == pygame.KEYUP:
+            return True
+        mods = getattr(event, "mod", None)
+        if mods is None:
+            mods = pygame.key.get_mods()
+        if event.key == pygame.K_l and mods & pygame.KMOD_CTRL:
+            return False
+        if event.key == pygame.K_ESCAPE:
+            self.open = False
+            return True
+        target = "composer" if self.view == "Guide" else "query" if self.view == "Notes" else None
+        if target is None:
+            return True
+        value = getattr(self, target)
+        if event.key == pygame.K_BACKSPACE:
+            value = value[:-1]
+        elif getattr(event, "unicode", "").isprintable():
+            value = (value + event.unicode)[:500]
+        setattr(self, target, value)
+        self.page = 0
         return True
 
     def action(self, name, controller):
-        if name == 'notebook':
+        if name.startswith("agent_open:"):
+            self.view = name.split(":", 1)[1]
+            self.open = True
+            self.page = 0
+            if controller:
+                self.data = notebook(controller)
+        elif name == "notebook":
+            self.view = "Notes"
             self.open = not self.open
+            if controller:
+                self.data = notebook(controller)
+            self.page = 0
+        elif name.startswith("agent_view:"):
+            self.view = name.split(":", 1)[1]
+            self.page = 0
+        elif name.startswith("agent_provider:"):
+            self.provider = name.split(":", 1)[1]
+            self.call_index = -1
+            self.page = 0
+        elif name == "agent_context_mode":
+            self.raw_context = not self.raw_context
+            self.page = 0
+        elif name in {"agent_guide", "agent_remember"} and controller:
+            kind = "guide" if name == "agent_guide" else "remember"
+            if controller.add_operator_message(kind, self.composer):
+                self.composer = ""
+                self.data = notebook(controller)
+        elif name == "agent_toggle_lean" and controller:
+            controller.toggle_lean_context()
             self.data = notebook(controller)
+        elif name == "agent_replan" and controller:
+            controller.replan()
+        elif name == "agent_call_previous":
+            self.call_index -= 1
+        elif name == "agent_call_next":
+            self.call_index = min(-1, self.call_index + 1)
+        elif name.startswith("notes_view:"):
+            self.notes_view = name.split(":", 1)[1]
             self.page = 0
-        elif name.startswith('notes_view:'):
-            self.view = name.split(':', 1)[1]
-            self.page = 0
-        elif name == 'notes_next':
+        elif name == "notes_next":
             self.page += 1
-        elif name == 'notes_previous':
+        elif name == "notes_previous":
             self.page = max(0, self.page - 1)
-        elif name == 'notes_refresh':
+        elif name == "notes_refresh" and controller:
             self.data = notebook(controller)
-        elif name == 'notes_export':
+        elif name == "notes_export" and controller:
             return controller.export_notes()
 
     def draw(self, ui):
-        if not self.open or not self.data:
-            return
-        box = pygame.Rect(342, 176, 640, 828)
-        ui.actions = {key: rect for key, rect in ui.actions.items() if not rect.colliderect(box)}
-        pygame.draw.rect(ui.canvas, BG, box)
-        ui.text('Notebook', (box.x + 18, box.y + 18), ui.title)
-        for index, view in enumerate(('Now', 'Learned', 'Attempts')):
-            ui.button('notes_view:' + view, view, pygame.Rect(box.x + 18 + index * 96, box.y + 58, 88, 28),
-                      TEXT if view == self.view else MUTED)
-        ui.button('notes_refresh', 'Refresh', pygame.Rect(box.right - 180, box.y + 58, 76, 28))
-        ui.button('notebook', 'Close', pygame.Rect(box.right - 92, box.y + 58, 74, 28))
-        ui.text('Search: ' + (self.query or 'Type to filter'), (box.x + 18, box.y + 104),
-                ui.body, MUTED, max_width=box.width - 36)
-        lines = []
-        for entry in text_lines(self.data, self.view, self.query):
-            lines.extend(ui.wrap(entry, ui.body, box.width - 36))
-            lines.append('')
-        capacity = 24
-        self.page = min(self.page, max(0, (len(lines) - 1) // capacity))
-        for index, line in enumerate(lines[self.page * capacity:(self.page + 1) * capacity]):
-            ui.text(line, (box.x + 18, box.y + 150 + index * 24), ui.body, TEXT,
-                    max_width=box.width - 36)
-        ui.button('notes_previous', 'Previous', pygame.Rect(box.x + 18, box.bottom - 50, 84, 28))
-        ui.button('notes_next', 'Next', pygame.Rect(box.x + 114, box.bottom - 50, 68, 28))
-        ui.button('notes_export', 'Export', pygame.Rect(box.right - 98, box.bottom - 50, 80, 28))
+        if self.open:
+            draw_inspector(ui, self)

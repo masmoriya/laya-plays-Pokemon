@@ -112,9 +112,13 @@ def test_manual_pause_cancels_pending_actions_and_owns_no_new_transfer(tmp_path)
         c.resume();c.decision_future=Future();c.strategy.future=Future()
         tactical, strategic = c.decision_future, c.strategy.future
         c.party_reorder.phase='switch';c.roster_service.target=((1,1),'up')
+        from jpp.agent.gold97_battle import BattleAction
+        c.battle_executor.action=BattleAction('ball',reason='Capture GRIMBY')
         c.held_action='right';c.manual_pause()
         assert tactical.cancelled() and strategic.cancelled()
         assert c.held_action is None and c.party_reorder.phase=='close'
+        assert c.battle_executor.action is None
+        assert c.live_snapshot()['decision']['action']=='No automatic action'
         assert c.roster_service.target is None and not c.playback.requested
     finally:c.close()
 

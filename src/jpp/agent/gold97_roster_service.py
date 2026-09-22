@@ -40,7 +40,10 @@ class RosterService:
                 not fully_recovered(state) or self.owner.terrain is None):
             return False, None
         failed_foe = self.owner.training.data.get('readiness_failure')
-        plan = roster_plan(state, Mon(**failed_foe) if failed_foe else None)
+        # Routine healing does not justify rotating the team at the PC.
+        if not failed_foe or self.owner.recovery is not None:
+            return False, None
+        plan = roster_plan(state, Mon(**failed_foe))
         if plan is None:
             return False, None
         self.signature = (tuple(m.identity for m in state.party),

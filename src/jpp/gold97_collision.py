@@ -24,6 +24,8 @@ class Gold97CollisionMap:
     width: int
     height: int
     tiles: bytes
+    visible_cells: tuple = ()
+    entity_cells: tuple = ()
 
     @classmethod
     def from_emulator(cls, emulator, state):
@@ -98,10 +100,16 @@ class Gold97CollisionCache:
         self.was_in_battle = in_battle
         self.frames += 1
         if (self.frames <= self.refresh_frames or self.terrain is None or
+                self.frames % max(1, self.refresh_frames) == 0 or
                 not self._has_exit(state)):
             current = Gold97CollisionMap.from_emulator(emulator, state)
             if current is not None:
                 self.terrain = current
+        if self.terrain is not None:
+            from dataclasses import replace
+            from .terrain_capture import visible_map_cells
+            self.terrain = replace(self.terrain, visible_cells=visible_map_cells(emulator, state),
+                                   entity_cells=visible_map_cells(emulator, state, partial=True))
         return self.terrain
 
     def _has_exit(self, state):

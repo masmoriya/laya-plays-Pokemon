@@ -16,11 +16,21 @@ def notebook(controller):
         'run_id': memory.run_id, 'goal': MAIN.get(controller.route.now, 'Journey complete'),
         'next': plan.get('explanation') or (controller.strategy.target or {}).get('label', 'No committed plan'),
         'blocker': controller.pause_reason or '',
+        'continued_route_steps': memory.world.get('continued_route_steps', 0),
+        'exploration': {key: {'seen_cells': len(area.get('discovery', {}).get('tiles', {})),
+                              'visited_cells': len(area.get('visited', []))}
+                        for key, area in memory.world['maps'].items() if 'discovery' in area},
         'completed': sorted(controller.route.completed),
         'manual': sorted(controller.route.manual_history),
         'scope': prerequisites(memory, controller.route.now),
-        'learned': [*memory.world.get('facts', []), *data.get('clues', [])],
+        'learned': [*memory.world.get('facts', []), *data.get('clues', []),
+                    *[{'id': n['id'], 'map': n['map'], 'source': 'interaction',
+                       'text': f"{n.get('category', 'object')} at {n['cell']}: "
+                               f"{n.get('outcome', n['status'])}. {n.get('last_result', '')} "
+                               f"Attempts: {n.get('action_attempts', {})}"}
+                      for n in data['npcs'].values()]],
         'attempts': memory.experience.failures(controller.route.now),
+        'operator_messages': memory.experience.operator_messages(40),
         'events': memory.experience.recent(100),
         'limits': 'Observed state changes are not proof of milestone completion. '
                   'Experience survives restores; current facts follow the checkpoint.',

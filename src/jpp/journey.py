@@ -13,6 +13,7 @@ MAP_VERSION = 3  # background decoded from VRAM, not lagging screen pixels
 
 class Journey:
     def __init__(self, run_id, database="data/jev.sqlite"):
+        self.restored_checkpoint = None
         self.run_id = run_id
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,10 +186,22 @@ class Journey:
         self.db.commit()
 
     def restore_checkpoint(self, path):
+        self.restored_checkpoint = None
         row = self.db.execute("SELECT payload FROM journey_snapshots WHERE path=? AND run_id=?",
                               (str(path), self.run_id)).fetchone()
         if row is None:
-            return False
+            resolved = Path(path).resolve()
+            matches = [(run, saved) for run, saved in self.db.execute(
+                "SELECT run_id,path FROM journey_snapshots")
+                if not saved.startswith("archive:") and Path(saved).resolve() == resolved]
+            own = [pair for pair in matches if pair[0] == self.run_id]
+            payloads = [self.db.execute(
+                "SELECT payload FROM journey_snapshots WHERE run_id=? AND path=?", pair).fetchone()[0]
+                for pair in (own or matches)]
+            if not payloads or len(set(payloads)) != 1:
+                return False
+            row = (payloads[0],)
+        self.restored_checkpoint = Path(path).resolve()
         # Preserve the pre-restore view for later inspection, even after rewinding.
         archive = f"archive:{self.run_id}:{time.time_ns()}"
         self.record_checkpoint(archive)
@@ -220,6 +233,7 @@ class Journey:
         return True
 
     def reset_view(self):
+        self.restored_checkpoint = None
         self.record_checkpoint(f"archive:{self.run_id}:{time.time_ns()}")
         self.route = RouteProgress()
         self.tiles = {}

@@ -1,6 +1,6 @@
 """Gold97 controller encounter responsibilities."""
 
-from .gold97_services import needs_healing, novel_capture
+from .gold97_services import novel_capture
 from .controller_constants import _MAX_CAPTURE_ATTEMPTS
 
 class EncounterExecution:
@@ -43,7 +43,10 @@ class EncounterExecution:
             return None
         # A weak party gets out of a wild encounter first.  Capturing is a
         # useful detour only when the active team can safely continue.
-        if needs_healing(state):
+        from .gold97_readiness import affordable_fight
+        active = getattr(state.battle, 'active', None) or next(iter(state.party), None)
+        if (self.training.readiness(state).conserve or active is None
+                or not affordable_fight(active, foe, extra_turns=2)):
             self.capture = None
             return None
         balls = getattr(state, "poke_ball_count", None)

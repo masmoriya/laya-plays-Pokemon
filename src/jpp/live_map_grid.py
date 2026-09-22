@@ -22,7 +22,7 @@ class MapGrid:
 
     def draw(self, snapshot, view):
         terrain = snapshot.terrain
-        key = (terrain.map_key, terrain.width, terrain.height, terrain.tiles, view.size)
+        key = (terrain.map_key, terrain.width, terrain.height, terrain.tiles, getattr(terrain, "seen", None), view.size)
         size = 12
         if self.key != key:
             source = pygame.Surface((terrain.width * size, terrain.height * size))
@@ -62,11 +62,14 @@ class MapGrid:
         previous = self.ui.canvas.get_clip()
         self.ui.canvas.set_clip(target.clip(previous))
         try:
-            for entity in snapshot.entities:
-                x, y = entity.pixel_x / 16, entity.pixel_y / 16
-                if entity.map_key == key and 0 <= x < terrain.width and 0 <= y < terrain.height:
-                    pygame.draw.rect(self.ui.canvas, WARN,
-                                     pygame.Rect(*center(x, y), 5, 5).move(-2, -2))
+            from .live_map_markers import draw_objects
+            seen = getattr(terrain, 'seen', None)
+            trail = snapshot.trail[-48:]
+            for start, end in zip(trail, trail[1:]):
+                if (abs(start[0]-end[0])+abs(start[1]-end[1]) == 1
+                        and (seen is None or start in seen and end in seen)):
+                    pygame.draw.line(self.ui.canvas, TEXT, center(*start), center(*end), 1)
+            draw_objects(self.ui, snapshot, center)
             destination = snapshot.destination
             if destination and destination[0] == terrain.map_key:
                 x, y = destination[1]

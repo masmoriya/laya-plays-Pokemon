@@ -37,18 +37,18 @@ def frontier_step(area, origin, width, height, *, terrain=None, avoid=()):
 
 
 class MovementHistory:
-    """Detect revisits across successful moves, not repeated idle frames."""
+    """Detect revisits across successful moves, including map transitions."""
 
     def __init__(self):
         self.points = []
 
     def observe(self, key, position):
         point = (key, position)
-        if self.points and self.points[-1][0] != key:
-            self.points.clear()
         if not self.points or self.points[-1] != point:
             self.points.append(point)
-            self.points = self.points[-16:]
+            # Keep enough history to catch short stair/door cycles without
+            # treating a legitimate return much later in the journey as a loop.
+            self.points = self.points[-24:]
 
     @property
     def looping(self):

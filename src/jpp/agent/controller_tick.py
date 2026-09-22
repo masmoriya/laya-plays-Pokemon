@@ -14,12 +14,20 @@ class TickExecution:
 
     def _prepare_step(self, state, *, frame=None, entities=(), overworld=True, terrain=None, prompt_visible=None):
         map_key = (state.map_group, state.map_number)
+        prompt = (_visible_prompt(state) if prompt_visible is None
+                  else prompt_visible)
+        local_dialogue = (not state.in_battle and not overworld and prompt
+                          and getattr(state, 'screen_cursor', None) is None)
         if map_key != self.interaction_map_key:
             self.interaction_positions.clear()
             self.last_move_direction = None
             self.interaction_map_key = map_key
         snapshot = self.map_state.snapshot
         self.terrain = snapshot.terrain if snapshot and overworld else None
+        if not state.in_battle and self.live.current.get('kind') == 'battle':
+            self.live.decide(kind='observation', source='Game state',
+                             why='Battle ended; reading the current screen',
+                             action='Read dialogue' if not overworld else 'Resume journey')
         self.route.observe(state)
         learned = proposed_move(state)
         if learned:
@@ -33,7 +41,7 @@ class TickExecution:
         if self.paused and self.playback.status == 'blocked':
             return False
         if (not state.in_battle and self._tactical_usage_provider() == "laya"
-                and self.provider_health != "ready"):
+                and self.provider_health != "ready" and not local_dialogue):
             self.last = None
             self.held_action = None
             if self.provider_health == "unavailable":
@@ -47,6 +55,11 @@ class TickExecution:
                 self._battle_reset()
         elif self._observe_move(state):
             return False
+        if overworld and not state.in_battle and getattr(state, 'player_moving', False):
+            from .route_execution import committed_heading
+            if not committed_heading(self, state, self.held_action):
+                self.held_action = None
+            return False
         if not state.in_battle and self.wild_battle_committed:
             self._battle_reset()
         self.unknown_frames = 0 if overworld or state.in_battle else self.unknown_frames + 1
@@ -56,9 +69,9 @@ class TickExecution:
             self.memory.remember("battle_end", "Encounter ended: " +
                                  " ".join(self.last_battle),
                                  f"{state.map_group:02X}:{state.map_number:02X}")
-            if self.last_battle[0] == "trainer" and state.x is not None and state.y is not None:
+            if state.x is not None and state.y is not None:
                 key, position = self._location(state)
-                self.memory.clear_blocked_at(key, position)
+                self.memory.clear_transient_blocks(key)
             self.last_battle = None
         self._finish_encounter(state)
         if self.capture and not state.in_battle:
@@ -90,11 +103,61 @@ class TickExecution:
             self.held_action = "a"
             self.cooldown = _MENU_COOLDOWN_FRAMES
             return "a"
+        from .gold97_screen import pc_screen
+        # Cancel incidental storage before healing or navigation confirms it.
+        if pc_screen(state) and not state.in_battle and not self.roster_service.transfer.phase:
+            page = tuple(getattr(state, "screen_lines", ()))
+            previous, attempts = getattr(self, "pc_escape", (None, 0))
+            attempts = attempts + 1 if page == previous else 1
+            self.pc_escape = (page, attempts)
+            self.held_action = None
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            self._set_provider_event("Closing the PC to resume the journey")
+            if attempts > 6:
+                self.pause("PC screen did not change after cancel attempts. Inspect the screen, then Retry.")
+                return None
+            return "b"
+        self.pc_escape = (None, 0)
         prompt = (_visible_prompt(state) if prompt_visible is None
                   else prompt_visible)
         if (not overworld and not state.in_battle and
                 (self.unknown_frames < 8 or not prompt)):
             return None
+        field = self.strategy.field_action
+        if field.phase:
+            action = field.step(state, overworld)
+            self.held_action = action if action in _STEPS and overworld else None
+            self.cooldown = _MOVE_HOLD_FRAMES if self.held_action else _MENU_COOLDOWN_FRAMES
+            if field.phase is None:
+                self.strategy.invalidate()
+                if field.error:
+                    self._set_provider_event(field.error)
+            return action
+        from .field_actions import field_confirmation
+        confirmation = field_confirmation(state) if not overworld and not state.in_battle else None
+        if confirmation:
+            self.held_action = None
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            self._set_provider_event('Confirm the usable field move')
+            return confirmation
+        teaching = self.hm_teaching
+        if (not teaching.phase and overworld and not state.in_battle
+                and not self.recovery and not self.party_reorder.phase
+                and not self.roster_service.transfer.phase and not self.strategy.observations.pending):
+            if teaching.start(state, self.route.now):
+                self.strategy.invalidate()
+                self._set_provider_event(f"Teach {teaching.plan['move']} to the compatible party Pokemon")
+        if teaching.phase:
+            action = teaching.step(state, overworld)
+            self.held_action = None
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            if teaching.phase is None:
+                self.strategy.invalidate()
+                if teaching.error:
+                    self.pause(teaching.error)
+                else:
+                    self._set_provider_event(f"Verified {teaching.plan['move']} in the party")
+            return action
         learning = learning_menu_step(state, self.learning_move)
         if learning is not None:
             action, detail = learning
@@ -104,8 +167,22 @@ class TickExecution:
             self.last_decision = None
             self.held_action = None
             self._set_provider_event(detail)
+            if action == 'wait':
+                self.cooldown = 6
+                return None
             self.cooldown = _MENU_COOLDOWN_FRAMES
             return action
+        if (not overworld and not state.in_battle and prompt
+                and getattr(state, 'screen_cursor', None) is None):
+            # Cursorless visible text is always forward dialogue. Handle it
+            # before healing, shopping, opening, and Journey planners can
+            # reinterpret the retained map coordinates as a movement task.
+            self.last_decision = None
+            self.held_action = None
+            self.last = None
+            self.cooldown = _MENU_COOLDOWN_FRAMES
+            self._set_provider_event('Advance visible dialogue')
+            return self.dialogue.advance(state, frame)
         key, position = self._location(state)
         self.navigation_target = None
         if getattr(state, 'storage_verified', False):
@@ -178,22 +255,8 @@ class TickExecution:
                 self.encounter["species_id"] = foe.species_id
                 self.encounter["species"] = foe.species
         foe = state.battle.opponent
-        if state.in_battle and state.battle.kind == "wild":
-            text = " ".join(" ".join(getattr(state, "screen_lines", ()) or ()).upper().split())
-            active = getattr(state.battle, "active", None)
-            forced = (getattr(state, "battle_menu_kind", None) in
-                      {"forced_prompt", "party", "party_action"}
-                      or (active is not None and active.hp <= 0))
-            failed_escape = any(message in text for message in
-                                ("CAN'T ESCAPE", "CANNOT ESCAPE", "CAN T ESCAPE"))
-            self.wild_battle_committed |= forced or failed_escape
-            if self.wild_battle_committed:
-                self.capture = None
-                action = self._trainer_battle_action(state)
-                self.last_decision = None
-                self.held_action = None
-                self.cooldown = _MENU_COOLDOWN_FRAMES
-                return action
+        # Wild turns, including failed escapes, return to the same planner.
+        # Menu execution handles forced replacements without committing to a fight.
         if state.in_battle:
             self.battle_strategy.static_capture = bool(self.encounter and self.encounter.get('started'))
             action = self._trainer_battle_action(state)

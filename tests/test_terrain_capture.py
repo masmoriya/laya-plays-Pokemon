@@ -67,6 +67,14 @@ def test_menu_battle_and_window_frames_never_enter_map():
     assert not visible_background(textbox, _state())
 
 
+def test_boundary_loading_coordinate_is_not_an_observed_map_position():
+    for x, y in ((255, 8), (20, 8), (8, 26), (-1, 8)):
+        state = _state()
+        state.x, state.y = x, y
+        assert not overworld_ready(_emulator(), state)
+        assert not visible_background(_emulator(), state)
+
+
 def test_walk_input_can_resume_before_camera_alignment_but_not_during_text():
     emulator = _emulator()
     emulator.screen.get_tilemap_position = lambda: ((3, 0), (160, 144))
@@ -126,9 +134,10 @@ def test_gold97_item_ball_object_is_tagged_without_pixel_guessing():
     state = _state()
     state.map_group, state.map_number = 20, 2
     state.map_width, state.map_height = 52, 38
-    base = 0xD723 + 16
+    state.mechanics_verified = True
+    base = 0xD6FC + 16
     emulator.memory[1, base] = 1
-    emulator.memory[1, base + 1] = 0x54
+    emulator.memory[1, base + 1] = 0x4E
     emulator.memory[1, base + 2] = state.y + 4
     emulator.memory[1, base + 3] = state.x + 5
     emulator.memory[1, base + 8] = 1

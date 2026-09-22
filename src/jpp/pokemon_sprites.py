@@ -11,6 +11,7 @@ from .gold97_data import Gold97RomData
 PIC_POINTERS = 0x48 * 0x4000  # Gold 97 pokecrystal.link: Pic Pointers at $48:4000
 TRAINER_PIC_POINTERS = 0x4A * 0x4000  # Reforged trainer pointer table
 PICS_FIX = 0x36
+EGG_SPRITE_ID = 0xFE
 _FLIP = bytes(int(f"{i:08b}"[::-1], 2) for i in range(256))
 
 
@@ -143,7 +144,12 @@ class PokemonSprites:
         self.frames = {}
 
     def frame(self, species):
-        identifier = self.ids.get(str(species).upper())
+        normalized = str(species).upper()
+        # Eggs use the cartridge's dedicated species sentinel rather than an
+        # entry in the normal species-name table. It still has a front sprite
+        # in the same picture-pointer table, so load it through the regular
+        # ROM-backed path instead of showing the generic silhouette.
+        identifier = EGG_SPRITE_ID if normalized == "EGG" else self.ids.get(normalized)
         if identifier is None:
             return None
         if identifier not in self.frames:

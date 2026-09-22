@@ -7,7 +7,6 @@ from pathlib import Path
 
 from ..checkpoints import CheckpointManager
 from ..terrain_capture import overworld_ready, visible_entities, visible_prompt
-from ..gold97_names import apply_requested_names
 from ..gold97_collision import Gold97CollisionCache
 from ..route_progress import RouteProgress
 from .gold97_controller import Gold97Controller
@@ -76,20 +75,18 @@ def play_gold97(emulator, adapter, policy, max_decisions, log_path=None,
     try:
         while (len(records) < max_decisions and frames < frame_limit
                and (max_seconds is None or time.monotonic() - started < max_seconds)):
-            apply_requested_names(emulator)
             snapshot = adapter.snapshot(emulator)
             state = snapshot.state
             terrain = collision_cache.update(emulator, state)
             frame = emulator.screen.ndarray
             entities = visible_entities(emulator, state)
-            visible_overworld = overworld_ready(emulator, state)
+            prompt = (visible_prompt(emulator, state)
+                      if not state.in_battle else False)
+            visible_overworld = overworld_ready(emulator, state) and not prompt
             overworld = visible_overworld and collision_cache.ready
             action = controller.step(state, frame=frame, entities=entities,
                                      overworld=overworld, terrain=terrain,
-                                     prompt_visible=(visible_prompt(emulator, state)
-                                                     if collision_cache.ready and
-                                                     not visible_overworld and not state.in_battle
-                                                     else False))
+                                     prompt_visible=prompt)
             if controller.paused and controller.playback.status == "blocked":
                 print(f"Gold 97 autonomous play paused: {controller.pause_reason}")
                 break

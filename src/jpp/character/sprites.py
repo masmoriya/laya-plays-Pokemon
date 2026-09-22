@@ -24,7 +24,10 @@ def _default_path() -> Path:
     checkout = Path("assets/jev/jev-spritesheet.png")
     if checkout.is_file():
         return checkout
-    return Path(__file__).resolve().parents[3] / checkout
+    source = Path(__file__).resolve().parents[3] / checkout
+    if source.is_file():
+        return source
+    return Path(__file__).resolve().parents[1] / "resources" / checkout
 
 
 class JevSprites:

@@ -3,7 +3,8 @@
 import re
 
 from ..gold97_catalog import move_names
-from .gold97_battle import _GOLD97_TYPE_CHART, _move_data, _move_name, _type_multiplier
+from .gold97_battle import _move_data, _move_name, _type_multiplier
+from .gold97_mechanics import TYPE_CHART as _GOLD97_TYPE_CHART
 
 
 _IMPORTANT_UTILITY = {
@@ -16,7 +17,7 @@ _IMPORTANT_UTILITY = {
     "BELLY DRUM": 22, "AGILITY": 17, "REST": 20,
 }
 _FIELD_MOVES = frozenset({"CUT", "FLY", "SURF", "STRENGTH", "FLASH",
-                          "WATERFALL", "WHIRLPOOL"})
+                          "WATERFALL", "WHIRLPOOL", "ROCK SMASH"})
 _VARIABLE_POWER = {"RETURN": 80, "FRUSTRATION": 70, "HIDDEN POWER": 60,
                    "MAGNITUDE": 70, "FLAIL": 50, "REVERSAL": 50,
                    "NIGHT SHADE": 40, "SEISMIC TOSS": 40,
@@ -110,6 +111,14 @@ def learning_menu_step(state, new_move):
     lines = tuple(getattr(state, "screen_lines", ()) or ())
     if getattr(state, "battle_menu_kind", None) in {"command", "moves"}:
         return None
+    text = " ".join(lines).upper()
+    if "STOP" in text and "LEARN" in text:
+        from .gold97_choices import answer_button, choice_rows
+        if choice_rows(state):
+            return answer_button(state, 'yes') or 'wait', 'Keep the current moves'
+    from .gold97_choices import answer_button, choice_rows
+    if choice_rows(state) and any(phrase in text for phrase in ('MAKE ROOM', 'DELETE', 'FORGET')):
+        return answer_button(state, 'yes' if new_move else 'no') or 'wait', 'Review the offered move'
     cancel = next((row for row, line in enumerate(lines)
                    if "CANCEL" in line.upper()), None)
     cursor = getattr(state, "screen_cursor", None)
@@ -123,13 +132,15 @@ def learning_menu_step(state, new_move):
         partial |= cancel is not None and sum(row is not None for row in rows) >= 2
         if any(row is None for row in rows) or len(set(rows)) != 4:
             continue
-        if not new_move or cursor is None or cursor[1] not in range(len(lines)):
-            return None, "Move-learning menu is missing its move or cursor"
+        if cursor is None or cursor[1] not in range(len(lines)):
+            return 'wait', "Waiting for the move-learning cursor"
+        if not new_move:
+            return 'b', "Keep current moves when the offered move is unknown"
         target = replacement_index(mon, new_move)
         if target is None:
-            if cancel is None:
-                return None, "Cannot locate cancel on the move-learning menu"
             detail = f"Keep {mon.species}'s current moves instead of learning {new_move}"
+            if cancel is None:
+                return 'b', detail
         else:
             detail = f"Learn {new_move} in place of {moves[target]}"
         target_row = cancel if target is None else rows[target]

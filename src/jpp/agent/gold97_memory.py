@@ -2,9 +2,11 @@
 
 import json
 import sqlite3
+import time
+from pathlib import Path
 
 
-NAVIGATION_VERSION = 4
+NAVIGATION_VERSION = 5
 
 
 def _migrate_world(world):
@@ -65,12 +67,39 @@ class Gold97Memory:
         edge = [list(origin), direction]
         field = "edges" if destination != origin else "blocked"
         other = "blocked" if destination != origin else "edges"
+        stamp = json.dumps(edge)
+        times = area.setdefault("blocked_at", {})
+        if destination == origin:
+            times[stamp] = time.time()
+        else:
+            times.pop(stamp, None)
         area[other] = [item for item in area[other] if item != edge]
         if edge not in area[field]:
             area[field].append(edge)
         if destination != origin:
             self.visited(key, destination)
         self.save()
+
+    def clear_transient_blocks(self, key):
+        """Recheck movement after scripts and battles can move map objects."""
+        area = self.map(key)
+        if area["blocked"]:
+            area["blocked"] = []
+            area["blocked_at"] = {}
+            self.save()
+
+    def expire_blocked(self, key, now=None):
+        """A failed step may be a sprite or animation, not a permanent wall."""
+        area = self.map(key)
+        now = time.time() if now is None else now
+        times = area.setdefault("blocked_at", {})
+        expired = {stamp for stamp, when in times.items() if now - when >= 30}
+        if expired:
+            area["blocked"] = [edge for edge in area["blocked"]
+                               if json.dumps(edge) not in expired]
+            for stamp in expired:
+                times.pop(stamp, None)
+            self.save()
 
     def clear_blocked_at(self, key, position):
         """Discard edges that may have been blocked by a moving battle NPC."""
@@ -109,7 +138,20 @@ class Gold97Memory:
         row = self.db.execute("SELECT payload FROM agent_world_checkpoints WHERE run_id=? AND path=?",
                               (self.run_id, str(path))).fetchone()
         if row is None:
-            return False
+            # The same explicit checkpoint may be opened with an absolute path
+            # or a different run label. Reuse only its exact recorded payload;
+            # never substitute the newest state from another run.
+            resolved = Path(path).resolve()
+            matches = [(run, saved) for run, saved in self.db.execute(
+                'SELECT run_id,path FROM agent_world_checkpoints')
+                if Path(saved).resolve() == resolved]
+            own = [(run, saved) for run, saved in matches if run == self.run_id]
+            payloads = [self.db.execute(
+                'SELECT payload FROM agent_world_checkpoints WHERE run_id=? AND path=?', pair).fetchone()[0]
+                for pair in (own or matches)]
+            if not payloads or len(set(payloads)) != 1:
+                return False
+            row = (payloads[0],)
         self.experience.interrupt('Checkpoint restored; prior action outcome is unknown')
         enabled = self.world.get("journey_strategy", {}).get("enabled")
         self.world = _migrate_world(json.loads(row[0]))

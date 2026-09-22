@@ -24,6 +24,10 @@ def _questions(options):
     }
 
 
+class InferenceBusy(RuntimeError):
+    """The single model worker is already serving a request."""
+
+
 class LayaService:
     def __init__(self, model_path, model=DEFAULT_MODEL, device=None):
         if not model_path:
@@ -34,11 +38,18 @@ class LayaService:
             import laya
         except ImportError as exc:
             raise RuntimeError("install the Laya extra with: uv sync --extra laya") from exc
+        # Small, serial decisions suffer from CPU thread oversubscription on
+        # the live game's host. Apply the budget before model initialization too.
+        import torch
+        cpu_threads = int(setting("cpu_threads", "1"))
+        if cpu_threads < 1:
+            raise ValueError("LAYA_CPU_THREADS must be positive")
+        torch.set_num_threads(cpu_threads)
         self.model_name = model
         self.agent = laya.load(model_path, device=device)
         # The local model is shared by ThreadingHTTPServer. Laya's sequence
         # builder/model cache is not guaranteed to be re-entrant, so serialize
-        # inference and let the client retry a transient 5xx safely.
+        # inference without queuing abandoned requests after client timeouts.
         self._predict_lock = threading.Lock()
 
     def decide(self, state, options):
@@ -56,11 +67,15 @@ class LayaService:
                 "latency_ms": 0.0,
             }
         started = time.monotonic()
-        with self._predict_lock:
+        if not self._predict_lock.acquire(blocking=False):
+            raise InferenceBusy("Laya is still completing the previous decision; retry shortly")
+        try:
             from .agent.tactical_context import pack_context
             questions = _questions(options)
             packed, context = pack_context(state, questions, self.agent)
             result = self.agent.predict(packed, questions)
+        finally:
+            self._predict_lock.release()
         answer = result["answers"]["next_action"]
         return {
             "action": answer["choice"],
@@ -82,7 +97,10 @@ def serve(service, host=DEFAULT_HOST, port=DEFAULT_PORT):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The client timed out; inference has already released its lock.
 
         def do_GET(self):
             if self.path == "/":
@@ -104,6 +122,8 @@ def serve(service, host=DEFAULT_HOST, port=DEFAULT_PORT):
                     return
                 payload = json.loads(self.rfile.read(length))
                 self._send(200, service.decide(payload.get("state"), payload.get("options")))
+            except InferenceBusy as exc:
+                self._send(503, {"error": str(exc)})
             except (ValueError, json.JSONDecodeError, KeyError) as exc:
                 self._send(400, {"error": str(exc)})
             except Exception as exc:

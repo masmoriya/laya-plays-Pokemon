@@ -29,7 +29,7 @@ def _sidecar(response, status=200):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            payload = json.dumps({"status": "ok", "model": "multilingual"}).encode()
+            payload = json.dumps({"status": "ok", "model": "multilingual", "context_packing_version": 1}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -188,7 +188,7 @@ def test_factory_selects_laya():
 def test_laya_provider_reads_sidecar_health():
     url, _, server = _sidecar({})
     try:
-        assert LayaProvider(url=url).health() == {"status": "ok", "model": "multilingual"}
+        assert LayaProvider(url=url).health() == {"status": "ok", "model": "multilingual", "context_packing_version": 1}
     finally:
         server.shutdown()
 
@@ -227,8 +227,8 @@ def test_laya_health_can_start_a_configured_local_sidecar(monkeypatch):
     monkeypatch.setenv("LAYA_STARTUP_TIMEOUT_S", "0.1")
     provider = LayaProvider(url="http://127.0.0.1:9876", timeout=0.01)
     responses = iter([URLError(ConnectionRefusedError("connection refused")),
-                      {"status": "ok", "model": "multilingual"},
-                      {"status": "ok", "model": "multilingual"}])
+                      {"status": "ok", "model": "multilingual", "context_packing_version": 1},
+                      {"status": "ok", "model": "multilingual", "context_packing_version": 1}])
 
     def health_request():
         response = next(responses)
@@ -243,7 +243,7 @@ def test_laya_health_can_start_a_configured_local_sidecar(monkeypatch):
         return process
 
     monkeypatch.setattr("jpp.agent.providers.laya_provider.subprocess.Popen", start)
-    assert provider.health() == {"status": "ok", "model": "multilingual"}
+    assert provider.health() == {"status": "ok", "model": "multilingual", "context_packing_version": 1}
     assert process.command[-2:] == ["--model-path", "/tmp/laya-model"]
     provider.close()
     assert process.terminated
@@ -257,3 +257,13 @@ def test_laya_sidecar_builds_one_closed_set_choice_question():
             "criteria": {"move_a": "safe move"},
         }
     }
+
+
+def test_busy_sidecar_is_not_immediately_retried():
+    url, seen, server = _sidecar({'error': 'previous decision still running'}, status=503)
+    try:
+        with pytest.raises(RuntimeError, match='previous decision still running'):
+            LayaProvider(url=url).decide_tactical({}, {'a': 'Confirm', 'b': 'Cancel'})
+    finally:
+        server.shutdown()
+    assert len(seen) == 1

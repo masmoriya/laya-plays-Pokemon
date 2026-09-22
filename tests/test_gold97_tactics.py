@@ -33,9 +33,10 @@ def state(active=None, foe=None, **kwargs):
 
 def owner():
     value = NS(battle_strategy=Gold97BattleStrategy(), battle_switch_phase=None,
-               battle_target=None, paused=False, message='')
+               battle_target=None, paused=False, message='', pending_states=[])
     value._set_provider_event = lambda text: setattr(value, 'message', text)
     value.pause = lambda text: (setattr(value, 'paused', True), setattr(value, 'message', text))
+    value.set_battle_pending = lambda state: value.pending_states.append(state.battle.kind)
     return value
 
 
@@ -291,6 +292,98 @@ def test_healing_waits_for_inventory_consumption_before_replanning():
     assert ex.action.kind == 'move'
 
 
+def test_capture_scans_pockets_and_reopens_pack_when_target_is_not_visible():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture CHIX')
+    ex.phase = 'ball'
+    own.battle_strategy.static_capture = True
+    st = state(battle_menu_kind='text', screen_lines=('POTION', 'CANCEL'),
+               screen_cursor=(0, 0))
+    st.battle = replace(st.battle, kind='wild')
+
+    assert [ex.step(own, st) for _ in range(4)] == [
+        'right', 'right', 'right', 'b'
+    ]
+
+    st.battle_menu_kind = 'command'
+    st.battle_menu_cursor = (1, 2)
+    st.screen_lines = ()
+    st.screen_cursor = None
+    assert ex.step(own, st) == 'a'
+
+
+def test_capture_retries_a_visibly_selected_ball_if_submenu_did_not_open():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture CHIX')
+    ex.phase = 'use_ball'
+    own.battle_strategy.static_capture = True
+    st = state(battle_menu_kind='text', screen_lines=('POK  BALL', 'CANCEL'),
+               screen_cursor=(0, 0))
+    st.battle = replace(st.battle, kind='wild')
+
+    assert ex.step(own, st) == 'a'
+    assert ex.step(own, st) == 'a'
+
+
+def test_capture_confirms_visible_use_before_cursor_tile_is_readable():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture CHIX')
+    ex.phase = 'use_ball'
+    own.battle_strategy.static_capture = True
+    st = state(battle_menu_kind='text',
+               screen_lines=('POK BALL', 'CANCEL', 'USE', 'QUIT'),
+               screen_cursor=None)
+    st.battle = replace(st.battle, kind='wild')
+
+    assert ex.step(own, st) == 'a'
+    assert ex.phase == 'throw'
+
+
+def test_stale_capture_is_replanned_for_trainer_battle():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture GRIMBY')
+    ex.phase = 'ball'
+    ex.battle_kind = 'wild'
+    ex.opponent_species_id = 200
+
+    assert ex.step(own, state()) == 'a'
+    assert ex.action.kind == 'move'
+    assert own.pending_states == ['trainer']
+
+
+def test_stale_capture_is_replanned_when_pokedex_already_owns_target():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture GRIMBY')
+    ex.phase = 'ball'
+    own.battle_strategy.static_capture = True
+    foe = mon(0, species='GRIMBY', species_id=200, hp=10)
+    st = state(foe=foe, pokedex_caught_ids=(200,))
+    st.battle = replace(st.battle, kind='wild')
+
+    assert ex.step(own, st) == 'right'
+    assert ex.action.kind == 'escape'
+
+
+def test_caught_bit_does_not_interrupt_an_observed_ball_animation():
+    from jpp.agent.gold97_battle import BattleAction
+    ex, own = BattleExecutor(), owner()
+    ex.action = BattleAction('ball', reason='Capture GRIMBY')
+    ex.phase = 'throw'
+    ex.battle_kind = 'wild'
+    ex.opponent_species_id = 200
+    foe = mon(0, species='GRIMBY', species_id=200, hp=10)
+    st = state(foe=foe, pokedex_caught_ids=(200,), battle_menu_kind='text')
+    st.battle = replace(st.battle, kind='wild')
+
+    assert ex.step(own, st) is None
+    assert ex.action.kind == 'ball' and ex.phase == 'throw'
+
+
 def test_incompatible_cartridge_does_not_execute_assumed_mechanics():
     ex, own = BattleExecutor(), owner()
     st = state(mechanics_verified=False)
@@ -332,3 +425,28 @@ def test_forced_party_confirmation_retries_when_first_tap_is_ignored():
         assert executor.step(control, st) is None
     assert executor.step(control, st) == 'a'
     assert not control.paused
+
+
+def test_tm_pocket_quantity_is_not_a_party_member():
+    from jpp.agent.gold97_screen import battle_menu
+    lines = [' ' * 20 for _ in range(18)]
+    lines[2], lines[3], lines[4], lines[6] = '31 MUD-SLAP', '1', 'H1 CUT', 'CANCEL'
+    tiles = [[0x7f] * 20 for _ in range(18)]
+    tiles[4][7] = 0xed
+    assert battle_menu(lines,tiles) == ('text',None)
+
+
+def test_switch_for_large_damage_advantage_accounts_for_entry_cost_and_stays_in():
+    active = mon(moves=('TACKLE',), pp=(30,), stats=(10,80,40,10,80), hp=60)
+    bench = mon(2, moves=('EMBER',), pp=(25,), hp=100, max_hp=100,
+                stats=(80,100,60,100,100))
+    foe = mon(0, hp=90, max_hp=90, types=('BUG',), moves=('TACKLE',), pp=(30,),
+              stats=(10,80,20,10,80))
+    planner = Gold97BattleStrategy()
+    st = state(active, foe, party=(active,bench))
+    action = planner.plan(st)
+    assert action.kind == 'switch' and action.target == 1
+    st = state(bench, foe, party=(active,bench), active_slot=1)
+    assert planner.plan(st).kind == 'move'
+    st = state(active, foe, party=(active,replace(bench,hp=1)))
+    assert planner.plan(st).kind == 'move'

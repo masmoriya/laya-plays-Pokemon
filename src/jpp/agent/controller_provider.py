@@ -75,14 +75,23 @@ class ProviderLifecycle:
         if self.vision_future:
             if not self.vision_future.done():
                 return None
+            vision_error = ""
             try:
                 note = self.vision_future.result()
             except Exception as exc:
+                vision_error = f"{type(exc).__name__}: {exc}"
                 self.strategy.provider_failed(f"Luna screen reader: {type(exc).__name__}")
+                self.live.vision_finished(error=vision_error)
+                self.live.model_call("luna", status="error", error=str(exc), phase="vision")
                 note = {"mode": "unknown", "screen_text": [],
                         "uncertainty": type(exc).__name__}
-            if note:
+            if note and not vision_error:
                 self.usage.record("luna", **(note.get("usage") or {}))
+                self.live.vision_finished(note)
+                self.live.model_call(
+                    "luna", note.get("usage"),
+                    (self.live.vision or {}).get("model_input"), phase="vision",
+                )
             if self.vision_key == key and note:
                 expected = "battle" if state.in_battle else "overworld"
                 if state.in_battle and note["mode"] != expected:
@@ -109,7 +118,9 @@ class ProviderLifecycle:
         self.screen_note = None
         model_input = getattr(self.vision, "model_input", None)
         if callable(model_input):
-            self.latest_model_input = {"provider": "Luna", **model_input(frame)}
+            payload = model_input(frame)
+            self.latest_model_input = {"provider": "Luna", **payload}
+            self.live.vision_started(frame, payload)
             self._set_provider_event("Luna input · screen + image")
         self.vision_future = self.executor.submit(self.vision.describe, frame.copy())
         return None
@@ -117,6 +128,7 @@ class ProviderLifecycle:
 
     def pause(self, reason):
         self.memory.experience.interrupt(reason)
+        self.live.result(reason)
         if 'unavailable' in reason and reason.startswith(('Laya', 'Jev')):
             self.provider_health = 'unavailable'
             self.playback.waiting(reason)
@@ -141,6 +153,9 @@ class ProviderLifecycle:
 
     def resume(self):
         self.dialogue.reset()
+        self.dialogue_choice = None
+        self._battle_reset()
+        self.capture = None
         self.playback.request(True)
         self.strategy.invalidate()
         self.strategy.observations.pending = None
@@ -160,5 +175,11 @@ class ProviderLifecycle:
         self.held_action = None
         self.interaction_positions.clear()
         self.interaction_map_key = None
+        self.live.decide(
+            kind="state",
+            source="Observed game state",
+            why="AI control resumed",
+            action="Read current game state",
+        )
         if self.provider_health == "unavailable":
             self._start_provider_health_check()

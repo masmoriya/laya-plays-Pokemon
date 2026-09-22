@@ -62,7 +62,7 @@ class PartyReorder:
             return 'b'
         if frame == self.confirmed and self.repeats % 6:
             return None
-        if overworld and self.phase == 'open':
+        if overworld and self.phase in {'open', 'start'}:
             self.phase = 'start'
             return 'start'
         if self.phase == 'start':

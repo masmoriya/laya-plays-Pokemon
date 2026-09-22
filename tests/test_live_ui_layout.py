@@ -65,24 +65,45 @@ def test_dashboard_distinguishes_laya_health_from_autonomous_mode():
         ui = LiveUI(pygame.display.set_mode(SIZE))
         rendered = []
         original = ui.text
-
-        def capture(value, pos, font=None, color=None, **kwargs):
-            if pos == (LEFT.x + 75, LEFT.y + 14):
-                rendered.append(str(value))
-            if color is None:
-                original(value, pos, font, **kwargs)
-            else:
-                original(value, pos, font, color, **kwargs)
-
-        # Keep the assertion focused on the status text without depending on a
-        # particular font rasterization.
-        ui.text = capture
+        ui.text = lambda value, *args, **kwargs: (rendered.append(str(value)),
+                                                  original(value, *args, **kwargs))[1]
         ui._thoughts(
             {"luna": [], "laya": []}, Animation(),
             {"tactical_provider": "laya", "tactical_label": "Laya",
-             "tactical_status": "unavailable", "model_usage": {"laya": {}, "luna": {}}},
+             "tactical_status": "unavailable", "control_mode": "paused",
+             "tactical_available": True,
+             "model_usage": {"laya": {}, "luna": {}}},
         )
-        assert "Unavailable" in rendered
+        assert "Laya paused" in rendered
+        assert "retry_agent" in ui.actions
+    finally:
+        pygame.quit()
+
+
+def test_dashboard_renders_all_three_control_ownership_states():
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        for mode, label, action in (
+            ("ai", "Laya playing", "toggle_jev"),
+            ("human", "Human playing", "toggle_jev"),
+            ("paused", "Laya paused", "retry_agent"),
+        ):
+            rendered = []
+            original = ui.text
+            ui.actions.clear()
+            ui.text = lambda value, *args, **kwargs: (rendered.append(str(value)),
+                                                      original(value, *args, **kwargs))[1]
+            ui._thoughts(
+                {"laya": []}, Animation(),
+                {"tactical_provider": "laya", "tactical_label": "Laya",
+                 "tactical_available": True, "control_mode": mode,
+                 "model_usage": {"laya": {}, "luna": {}}},
+            )
+            ui.text = original
+            assert label in rendered and action in ui.actions
+            assert "Ctrl-L" in rendered
     finally:
         pygame.quit()
 
@@ -92,6 +113,7 @@ def test_activity_uses_available_space_and_scrolls_to_older_events():
     pygame.init()
     try:
         ui = LiveUI(pygame.display.set_mode(SIZE))
+        ui.show_feed = True
         rendered = []
         ui.text = lambda value, pos, font=None, color=None, **kwargs: rendered.append(str(value))
         entries = [f"Event {index}" for index in range(40)]
@@ -101,9 +123,8 @@ def test_activity_uses_available_space_and_scrolls_to_older_events():
         ui._thoughts({"laya": entries}, Animation(), progress)
         assert "Event 39" in rendered
         assert "Event 0" not in rendered
-        assert any("123 in / 4 out" in line for line in rendered)
-        assert any("Luna 1 calls · 6 in / 7 out" in line for line in rendered)
-        assert "Luna" not in rendered
+        assert any("Laya · 2 calls · 127 tokens" in line for line in rendered)
+        assert any("Luna · 1 call · 13 tokens" in line for line in rendered)
         ui._dest = pygame.Rect(0, 0, *SIZE)
         ui.scroll_activity(ui.activity_bounds.center, 20)
         rendered.clear()
@@ -113,7 +134,7 @@ def test_activity_uses_available_space_and_scrolls_to_older_events():
         pygame.quit()
 
 
-def test_activity_collapses_repeated_events_and_discloses_exact_model_input():
+def test_activity_separates_decisions_from_raw_feed_and_context_inspector():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
     try:
@@ -122,23 +143,27 @@ def test_activity_collapses_repeated_events_and_discloses_exact_model_input():
         ui.text = lambda value, pos, font=None, color=None, **kwargs: rendered.append(str(value))
         progress = {
             "tactical_provider": "laya",
+            "tactical_label": "Laya",
+            "control_mode": "ai",
+            "tactical_available": True,
             "model_usage": {"laya": {}, "luna": {}},
-            "model_input": {
-                "provider": "Laya",
-                "state": {"decision_kind": "overworld", "position": {"x": 3, "y": 5}},
-                "questions": {"next_action": {"criteria": {"up": "walk north"}}},
-            },
+            "agent_state": {"decision": {"sequence": 1, "why": "Only available action",
+                              "action": "Move up", "result": "Position 3,4"},
+                            "decisions": [], "model_inputs": {"laya": {
+                                "state": {"decision_kind": "overworld", "position": [3, 5]}}}},
         }
 
         ui._thoughts({"laya": ["Executor chose a"] * 6}, Animation(), progress)
-        assert "Executor chose a ×6" in rendered
-        assert "model_input" in ui.actions
+        assert "Only available action" in rendered
+        assert "Move up" in rendered
+        assert "Executor chose a ×6" not in rendered
+        assert "toggle_feed" in ui.actions
 
-        ui.show_model_input = True
+        ui.show_feed = True
         rendered.clear()
-        ui._thoughts({"laya": []}, Animation(), progress)
-        assert "Laya input" in rendered
-        assert any('"decision_kind": "overworld"' in line for line in rendered)
+        ui._thoughts({"laya": ["Executor chose a"] * 6}, Animation(), progress)
+        assert "Executor chose a ×6" in rendered
+        assert "model_input" not in ui.actions
     finally:
         pygame.quit()
 

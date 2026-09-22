@@ -58,6 +58,7 @@ class LivePanels:
     def stages(self, journey):
         box = pygame.Rect(994, 570, 434, 434)
         self._panel(box, "Journey")
+        self.ui.button("agent_open:Steps", "Steps", pygame.Rect(box.right - 76, box.y + 8, 62, 22))
         stages = journey.route.display() if journey else {}
         row_y = box.y + 35
         for key in ("now", "next", "later"):

@@ -84,8 +84,20 @@ def center_target(state):
 
 
 def center_retreat_target(state):
-    return CENTER_RETREAT_EXITS.get((getattr(state, "map_group", None),
-                                     getattr(state, "map_number", None)))
+    known = CENTER_RETREAT_EXITS.get((getattr(state, "map_group", None),
+                                      getattr(state, "map_number", None)))
+    if known:
+        return known
+    # Interior exits are decoded from this cartridge. A gym/shop opening into
+    # a town with a known Center is a safe retreat, without a scripted route.
+    exits = [(abs(x - state.x) + abs(y - state.y), (x, y),
+              direction or ('down' if y == state.map_height - 1 else None))
+             for x, y, direction, group, number in getattr(state, 'map_exits', ())
+             if (group, number) in CENTER_ENTRANCES]
+    if exits:
+        _, target, direction = min(exits)
+        return target, direction
+    return None
 
 
 def mart_target(state):

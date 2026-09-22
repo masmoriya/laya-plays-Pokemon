@@ -16,6 +16,10 @@ def add_parser(sub):
     parser.add_argument("--game-adapter", choices=["auto", "red", "gold97", "generic"], default="auto")
     parser.add_argument("--provider", choices=["fake", "jev", "laya"],
                         help="tactical provider; defaults to AGENT_PROVIDER or Laya")
+    parser.add_argument("--vision", choices=["local", "codex", "off"],
+                        help="vision backend; defaults to local for Laya")
+    parser.add_argument("--manual", action="store_true",
+                        help="start paused; F2 starts autonomous play")
     parser.add_argument("--speed", type=float, choices=SPEEDS, default=1.0, help="emulation speed multiplier")
     parser.add_argument("--resume", action="store_true", help="load the latest snapshot (default)")
     parser.add_argument("--new", dest="resume", action="store_false",
@@ -25,9 +29,11 @@ def add_parser(sub):
     parser.set_defaults(resume=True)
 
     def launch(args):
+        from .live_models import prepare_models
+        provider = prepare_models(args.provider, args.vision)
         from .live import run
         return run(args.rom, args.state, args.run_id, args.rules, args.player_name,
                    args.starter, args.game_adapter, args.speed, args.resume, args.native_save,
-                   args.provider)
+                   provider, autoplay=False if args.manual else None)
 
     parser.set_defaults(func=launch)

@@ -3,8 +3,10 @@ from types import SimpleNamespace
 
 import pygame
 
-from jpp.live import SPEEDS, _adjust_speed, _press_held_buttons, add_parser
-from jpp.live_controls import handle_keydown
+from jpp.live import SPEEDS, _adjust_speed, _frames_per_render, _press_held_buttons, add_parser
+from jpp.live_controls import (KEYS, handle_keydown, player_control_mode,
+                               takes_human_control)
+from jpp.live_notebook import NotebookPanel
 from jpp.live_ui import format_duration, starter_name
 from jpp.progress import ProgressTracker
 
@@ -33,6 +35,18 @@ def test_no_held_buttons_do_not_send_input():
     assert emulator.presses == []
 
 
+def test_fast_forward_advances_multiple_game_frames_per_render():
+    assert [_frames_per_render(speed) for speed in SPEEDS] == [1, 2, 4, 8]
+
+
+def test_held_buttons_cover_all_fast_forward_frames():
+    emulator = FakeEmulator()
+
+    _press_held_buttons(emulator, {"right"}, frames=8)
+
+    assert emulator.presses == [("right", 8)]
+
+
 def test_a_is_a_bounded_tap(monkeypatch):
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     emulator = FakeEmulator()
@@ -45,9 +59,9 @@ def test_a_is_a_bounded_tap(monkeypatch):
 
 
 def test_speed_controls_walk_the_supported_steps_and_clamp():
-    assert _adjust_speed(1.0, -1) == 0.5
-    assert _adjust_speed(0.25, -1) == SPEEDS[0]
-    assert _adjust_speed(4.0, 1) == SPEEDS[-1]
+    assert SPEEDS == (1.0, 2.0, 4.0, 8.0)
+    assert _adjust_speed(1.0, -1) == SPEEDS[0]
+    assert _adjust_speed(8.0, 1) == SPEEDS[-1]
 
 
 def test_speed_key_only_changes_the_frame_pacer_setting(monkeypatch):
@@ -55,6 +69,14 @@ def test_speed_key_only_changes_the_frame_pacer_setting(monkeypatch):
     emulator = FakeEmulator()  # no PyBoy throttle API should be called
     speed = handle_keydown(SimpleNamespace(key=pygame.K_2), emulator, set(), lambda _: None, 1.0)
     assert speed == 2.0
+
+
+def test_speed_keys_select_four_and_eight_x(monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    emulator = FakeEmulator()
+    for key, expected in ((pygame.K_4, 4.0), (pygame.K_8, 8.0)):
+        speed = handle_keydown(SimpleNamespace(key=key), emulator, set(), lambda _: None, 1.0)
+        assert speed == expected
 
 
 def test_ctrl_l_toggles_laya_playback(monkeypatch):
@@ -68,6 +90,43 @@ def test_ctrl_l_toggles_laya_playback(monkeypatch):
     assert speed == 1.0
     assert actions == ["toggle_jev"]
     assert emulator.presses == []
+
+
+def test_ctrl_l_remains_global_while_agent_inspector_is_open():
+    panel = NotebookPanel()
+    panel.open = True
+    panel.view = "Guide"
+
+    consumed = panel.handle(SimpleNamespace(
+        type=pygame.KEYDOWN, key=pygame.K_l, mod=pygame.KMOD_CTRL, unicode="l"
+    ))
+
+    assert consumed is False
+    assert panel.composer == ""
+
+
+def test_f2_toggles_laya_playback(monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    actions = []
+
+    handle_keydown(SimpleNamespace(key=pygame.K_F2), FakeEmulator(), set(),
+                   actions.append, 1.0)
+
+    assert actions == ["toggle_jev"]
+
+
+def test_every_game_control_takes_ownership_from_ai():
+    assert {KEYS[key] for key in KEYS if takes_human_control(key, True)} == {
+        "up", "down", "left", "right", "a", "b", "start", "select"
+    }
+    assert not any(takes_human_control(key, False) for key in KEYS)
+
+
+def test_player_control_mode_keeps_human_ownership_distinct_from_ai_pause():
+    assert player_control_mode(True) == "ai"
+    assert player_control_mode(False, paused=True) == "human"
+    assert player_control_mode(True, paused=True) == "paused"
+    assert player_control_mode(True, inspector_open=True) == "paused"
 
 
 def test_live_resumes_snapshots_by_default_and_can_start_fresh():

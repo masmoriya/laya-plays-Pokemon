@@ -25,7 +25,9 @@ def draw_strategy(ui, box, top):
         npcs = data.get("npcs", [])
         talked = sum(npc["status"] == "talked" for npc in npcs)
         deferred = sum(npc["status"] == "deferred" for npc in npcs)
-        lines = [f"NPCs: {talked}/{len(npcs)} talked · {deferred} deferred",
+        collected = sum(n.get('outcome') == 'collected' for n in npcs)
+        unresolved = sum(n.get('outcome') == 'unresolved' for n in npcs)
+        lines = [f"{talked} conversations · {collected} collected · {unresolved} unresolved",
                  data.get("playback", {}).get("status", "idle")]
         lines += [f"+{event['points']} {event['kind']} · {event['label']}"
                   for event in rewards.get("recent", [])[-3:]]
@@ -40,9 +42,11 @@ def draw_strategy(ui, box, top):
 def controls(ui, progress):
     if not progress.get("strategy"):
         return
+    training = progress.get("training_enabled", False)
+    ui.button("toggle_training", f"Training {'on' if training else 'off'}",
+              pygame.Rect(1180, 1026, 120, 30), TEXT if training else MUTED)
     enabled = progress["strategy"]["enabled"]
-    ui.button('notebook', 'Notes', pygame.Rect(1232, 1026, 66, 30))
-    ui.button("toggle_luna", f"Luna strategy {'On' if enabled else 'Off'}",
-              pygame.Rect(1012, 1026, 144, 30))
-    if progress.get("agent_paused"):
-        ui.button("retry_agent", "Retry", pygame.Rect(1164, 1026, 60, 30))
+    ui.button("agent_open:Guide", "Guide", pygame.Rect(910, 1026, 70, 30))
+    ui.button("agent_open:Context", "Context", pygame.Rect(988, 1026, 82, 30))
+    ui.button("toggle_luna", f"Luna {'on' if enabled else 'off'}",
+              pygame.Rect(1078, 1026, 94, 30), TEXT if enabled else MUTED)

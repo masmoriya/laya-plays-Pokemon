@@ -19,7 +19,7 @@ def state(**values):
 
 
 def terrain(tiles=bytes(12), key=(20, 4)):
-    return Gold97CollisionMap(key, 4, 3, tiles)
+    return Gold97CollisionMap(key, 4, 3, tiles, tuple((x,y) for x in range(4) for y in range(3)))
 
 
 def update(model, st=None, grid=None, **kwargs):
@@ -100,7 +100,7 @@ def test_player_uses_current_coordinates_in_both_views(ui, position):
 
 
 def test_goal_entities_clipping_and_cache(ui):
-    entity = OverworldSprite("npc", "14:04", 16, 16, bytes(1024))
+    entity = OverworldSprite("npc", "14:04", 16, 16, bytes(1024), kind="npc")
     update(ui.map_state, entities=(entity,), destination=((20, 4), (3, 2)))
     grid = ui.panels.map_panel.grid
     view = pygame.Rect(10, 10, 400, 300)

@@ -4,6 +4,7 @@ import os
 
 import pygame
 
+from jpp.character.animation import Animation
 from jpp.live_ui import LiveUI, SIZE
 
 
@@ -25,8 +26,9 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
 
         ui.text = capture
         ui._footer(progress)
-        assert "Luna strategy On" in labels
-        assert "Play Laya" in labels and "Retry" in labels
+        assert "Training off" in labels
+        assert "Luna on" in labels
+        assert "Guide" in labels and "Context" in labels
         rectangles = list(ui.actions.items())
         for i, (name, rect) in enumerate(rectangles):
             for other, other_rect in rectangles[i + 1:]:
@@ -35,13 +37,15 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
             ui._dest = pygame.Rect(0, 0, int(SIZE[0] * scale), int(SIZE[1] * scale))
             center = ui.actions["toggle_luna"].center
             assert ui.action_at((center[0] * scale, center[1] * scale)) == "toggle_luna"
+        progress["training_enabled"] = True
         progress["strategy"]["enabled"] = False
         ui._footer(progress)
-        assert "Luna strategy Off" in labels
+        assert "Luna off" in labels
+        assert "Training on" in labels
         labels.clear()
-        progress.update(play_requested=True, playback_status='waiting for provider')
-        ui._footer(progress)
-        assert 'Pause Laya' in labels and 'Play Laya' not in labels
+        progress.update(control_mode="paused")
+        ui._thoughts({"laya": []}, Animation(), progress)
+        assert 'Laya paused' in labels
         from jpp.live_strategy import draw_strategy
         ui.strategy_summary = {'known':'Observed clue','next':'Investigate local leads',
                                'rewards':{'points':25,'recent':[]},'intent':'Training Hoppip'}

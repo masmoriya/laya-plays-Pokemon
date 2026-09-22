@@ -25,13 +25,15 @@ def hold_action(emulator, action):
 def renew_movement(emulator, active, expected, *, overworld, in_battle,
                    pressed=False):
     """Keep native directional input down while the controller still owns it."""
-    # Timed taps own their scheduled release. Releasing A on the next frame
-    # truncates its four-frame pulse and can miss the game's input polling.
+    # Timed taps own their scheduled release. Menu directions use the same
+    # four-frame pulse as A/B, so returning them as an active overworld hold
+    # would release them on the next frame and can miss the game's input poll.
     if active not in _MOVES:
         return None
     walking = (active in _MOVES and active == expected and
                overworld and not in_battle)
-    if active is not None and not walking and not pressed:
-        emulator.button_release(active)
+    if not walking:
+        if not pressed:
+            emulator.button_release(active)
         return None
     return active

@@ -27,19 +27,24 @@ class NavigationExecution:
                     self._set_provider_event(
                         f"Moved {observed or 'across tiles'} to {position[0]},{position[1]}"
                     )
+                    self.live.result(f"Position {position[0]},{position[1]}")
                     self.stalls = 0
                     self.replans_at.pop((key, origin), None)
                     self.last = None
-                    # Replan immediately at the new tile. If the next route
-                    # step has the same heading, the native D-pad hold remains
-                    # down and walking continues without a release/repress gap.
-                    self.cooldown = 0
-                elif self.cooldown == 0:
+                    from .route_execution import committed_heading
+                    keep_walking = committed_heading(self, state, action)
+                    self.held_action = action if keep_walking else None
+                    if keep_walking:
+                        self.memory.world['continued_route_steps'] = self.memory.world.get('continued_route_steps', 0) + 1
+                        self.last = (key, position, action)
+                    self.cooldown = _MOVE_HOLD_FRAMES if keep_walking else 0
+                elif self.cooldown == 0 and not getattr(state, "player_moving", False):
                     self.held_action = None
                     self.memory.move_result(key, origin, action, position)
                     self._set_provider_event(
                         f"Blocked {action} at {position[0]},{position[1]}"
                     )
+                    self.live.result(f"Blocked at {position[0]},{position[1]}")
                     self.stalls += 1
                     self.last = None
                     if self.stalls >= 8:
@@ -69,9 +74,19 @@ class NavigationExecution:
                     "up": "move battle cursor up", "down": "move battle cursor down",
                     "left": "move battle cursor left", "right": "move battle cursor right"}
         if not overworld:
+            from .journey_prerequisites import ferry_menu_options
+            ferry = ferry_menu_options(state, self.route.now)
+            if ferry:
+                return ferry
             text = ' '.join(getattr(state, 'screen_lines', ())).upper()
+            if any(word in text for word in ('BUY', 'SELL', 'HOW MANY', 'WILL BE', 'DOLL')):
+                return {'b': 'leave shopping without an approved supply purchase'}
             if any(word in text for word in ('RELEASE', 'DEPOSIT', 'WITHDRAW', 'CHANGE BOX', 'STATS')):
                 return {'b': 'leave an unowned roster menu'}
+            from .gold97_choices import dialogue_options
+            choices = dialogue_options(self, state)
+            if choices is not None:
+                return choices
             if getattr(state, 'screen_cursor', None) is not None:
                 return {'b': 'cancel an unidentified menu'}
             return {"a": "advance current dialogue"}

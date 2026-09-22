@@ -30,6 +30,15 @@ class Experience:
             CREATE TABLE IF NOT EXISTS agent_attempts(
               run_id TEXT NOT NULL, scope TEXT NOT NULL, target TEXT NOT NULL,
               payload TEXT NOT NULL, PRIMARY KEY(run_id,scope,target));
+            CREATE TABLE IF NOT EXISTS agent_operator_messages(
+              id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, timestamp REAL NOT NULL,
+              kind TEXT NOT NULL, scope INTEGER, active INTEGER NOT NULL,
+              text TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS agent_operator_run
+              ON agent_operator_messages(run_id,id);
+            CREATE TABLE IF NOT EXISTS agent_context_preferences(
+              run_id TEXT NOT NULL, scope INTEGER NOT NULL, lean INTEGER NOT NULL,
+              PRIMARY KEY(run_id,scope));
         ''')
         self.pending = None
 
@@ -64,6 +73,64 @@ class Experience:
         rows = self.db.execute('SELECT id,timestamp,kind,payload FROM agent_journal '
                                'WHERE run_id=? ORDER BY id DESC LIMIT ?', (self.run_id, limit))
         return [{'id': i, 'timestamp': t, 'kind': k, **json.loads(p)} for i, t, k, p in rows]
+
+    def add_operator_message(self, kind, text, scope=None):
+        text = " ".join(str(text).split())[:500]
+        if not text or kind not in {"guide", "remember"}:
+            return None
+        if kind == "guide":
+            self.db.execute(
+                "UPDATE agent_operator_messages SET active=0 "
+                "WHERE run_id=? AND kind='guide' AND active=1", (self.run_id,)
+            )
+        cursor = self.db.execute(
+            "INSERT INTO agent_operator_messages(run_id,timestamp,kind,scope,active,text) "
+            "VALUES(?,?,?,?,1,?)", (self.run_id, time.time(), kind, scope, text)
+        )
+        self.db.commit()
+        self.record("operator_" + kind, message_id=cursor.lastrowid,
+                    scope=scope, text=text)
+        return cursor.lastrowid
+
+    def operator_messages(self, limit=20):
+        rows = self.db.execute(
+            "SELECT id,timestamp,kind,scope,active,text FROM agent_operator_messages "
+            "WHERE run_id=? ORDER BY id DESC LIMIT ?", (self.run_id, limit)
+        )
+        return [{"id": i, "timestamp": timestamp, "kind": kind, "scope": scope,
+                 "active": bool(active), "text": text}
+                for i, timestamp, kind, scope, active, text in rows]
+
+    def active_guide(self, scope):
+        row = self.db.execute(
+            "SELECT id,text FROM agent_operator_messages WHERE run_id=? "
+            "AND kind='guide' AND active=1 AND scope=? ORDER BY id DESC LIMIT 1",
+            (self.run_id, scope),
+        ).fetchone()
+        return {"id": row[0], "text": row[1]} if row else None
+
+    def retire_guides(self, scope):
+        self.db.execute(
+            "UPDATE agent_operator_messages SET active=0 WHERE run_id=? "
+            "AND kind='guide' AND active=1 AND scope<>?", (self.run_id, scope)
+        )
+        self.db.commit()
+
+    def set_lean_context(self, scope, enabled):
+        self.db.execute(
+            "INSERT OR REPLACE INTO agent_context_preferences VALUES(?,?,?)",
+            (self.run_id, int(scope or 0), int(bool(enabled))),
+        )
+        self.db.commit()
+        self.record("context_mode", scope=scope,
+                    mode="lean" if enabled else "standard")
+
+    def lean_context(self, scope):
+        row = self.db.execute(
+            "SELECT lean FROM agent_context_preferences WHERE run_id=? AND scope=?",
+            (self.run_id, int(scope or 0)),
+        ).fetchone()
+        return bool(row and row[0])
 
     def observe(self, state):
         current = observation(state)

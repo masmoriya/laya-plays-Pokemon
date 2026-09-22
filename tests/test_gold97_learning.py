@@ -50,14 +50,14 @@ def test_move_menu_steers_from_cursor_and_confirms_only_the_chosen_row():
 
 def test_unknown_move_or_cursor_never_confirms_a_deletion():
     state = screen(("EMBER", "SCRATCH", "SAND ATTACK", "GROWL"))
-    assert learning_menu_step(state, None)[0] is None
+    assert learning_menu_step(state, None)[0] == "b"
     state.screen_cursor = None
-    assert learning_menu_step(state, "BITE")[0] is None
+    assert learning_menu_step(state, "BITE")[0] == "wait"
     state.screen_cursor = (1, 1)
     state.screen_lines = ("EMBER", "SCRATCH", "CANCEL")
     assert learning_menu_step(state, "BITE")[0] is None
     state.screen_lines = ("EMBER", "SCRATCH", "SAND ATTACK", "GROWL")
-    assert learning_menu_step(state, None)[0] is None
+    assert learning_menu_step(state, None)[0] == "b"
 
 
 def test_no_upgrade_navigates_to_cancel_without_losing_a_move():
@@ -68,9 +68,23 @@ def test_no_upgrade_navigates_to_cancel_without_losing_a_move():
     state.screen_cursor = (1, 4)
     assert learning_menu_step(state, "GROWL")[0] == "a"
     state.screen_lines = state.screen_lines[:-1]
-    assert learning_menu_step(state, "GROWL")[0] is None
+    state.screen_cursor = (1, 0)
+    assert learning_menu_step(state, "GROWL")[0] == "b"
 
 
 def test_field_move_is_not_selected_for_deletion():
     current = mon(("CUT", "EMBER", "SCRATCH", "GROWL"))
     assert replacement_index(current, "BITE") != 0
+
+
+def test_stop_learning_popup_ignores_hp_behind_no_row():
+    lines = [' ' * 20 for _ in range(18)]
+    lines[8] = ' ' * 16 + 'YES '
+    lines[10] = '69' + ' ' * 14 + 'NO  '
+    lines[14] = 'Stop learning'
+    lines[16] = 'STUN SPORE?'
+    state = screen(('TACKLE', 'ABSORB', 'SYNTHESIS', 'TAIL WHIP'))
+    state.screen_lines, state.screen_cursor = tuple(lines), (15, 10)
+    assert learning_menu_step(state, 'Stun Spore')[0] == 'up'
+    state.screen_cursor = (15, 8)
+    assert learning_menu_step(state, 'Stun Spore')[0] == 'a'

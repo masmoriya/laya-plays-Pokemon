@@ -83,6 +83,13 @@ def test_already_out_message_recovers_on_cartridge(tmp_path):
             if phase == 'select_active':
                 assert state.active_slot is not None
                 button = party_step(state.battle_menu_cursor, state.active_slot)
+                # The cartridge opens SWITCH/STATS after selecting a partner.
+                # Complete that visible submenu before expecting ALREADY OUT.
+                if state.battle_menu_kind == 'party_action':
+                    row = next(i for i, line in enumerate(state.screen_lines) if 'SWITCH' in line)
+                    cursor = state.battle_menu_cursor
+                    button = (None if cursor is None else 'a' if cursor[1] == row else
+                              'down' if cursor[1] < row else 'up')
                 if 'ALREADY OUT' in text:
                     phase = 'recover'
                     executor.reset()

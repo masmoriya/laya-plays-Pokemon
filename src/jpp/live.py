@@ -12,7 +12,6 @@ from .character.character_state import CharacterState
 from .audio import AudioSink, pre_init as pre_init_audio
 from .game_adapter import adapter_for_rom
 from .gold97_adapter import Gold97Adapter
-from .gold97_names import apply_requested_names
 from .gold97_collision import Gold97CollisionCache
 from .frame_pacer import FramePacer
 from .agent.gold97_controller import Gold97Controller
@@ -23,9 +22,10 @@ from .journey import Journey
 from .pokemon_sprites import PokemonSprites
 from .journey_timeline import MILESTONES, VISIBLE, timeline_start
 from .progress import ProgressTracker
+from .route_progress import RouteProgress
 from .terrain_capture import (WorldCamera, overworld_ready, visible_background,
                               visible_entities, visible_player, visible_prompt)
-from .live_controls import handle_keydown
+from .live_controls import handle_keydown, player_control_mode, takes_human_control
 from .live_cli import add_parser
 from .rules import GameRules
 from .telemetry import Event, EventType, RunStore
@@ -35,7 +35,12 @@ from .live_controls import DIRECTION_KEYS, KEYS, SPEEDS, _adjust_speed
 CHECKPOINT_INTERVAL_SECONDS = 120
 
 
-def _press_held_buttons(emulator, held_buttons):
+def _frames_per_render(speed):
+    """Return the number of game frames advanced for one displayed frame."""
+    return max(1, int(speed))
+
+
+def _press_held_buttons(emulator, held_buttons, frames=1):
     """Keep held controls down for the next emulator tick.
 
     PyBoy releases a button automatically unless it is pressed again before the next
@@ -43,7 +48,7 @@ def _press_held_buttons(emulator, held_buttons):
     instead of depending on the operating system's key-repeat interval.
     """
     for button in held_buttons:
-        emulator.button(button, 1)
+        emulator.button(button, frames)
 
 
 def run(
@@ -58,6 +63,8 @@ def run(
     resume=True,
     native_save=False,
     provider_name=None,
+    runtime_bridge=None,
+    autoplay=None,
 ):
     # Keep PyBoy and pygame on one SDL2 build on macOS. PyBoy otherwise loads
     # pysdl2-dll alongside pygame's bundled dylib and emits duplicate-class
@@ -75,14 +82,18 @@ def run(
     emu = PyBoy(str(rom), window="null")
     emu.set_emulation_speed(0)
     state_path = Path(state) if state else None
-    if state_path is None and resume and not native_save:
+    auto_resume = state_path is None and resume and not native_save
+    if auto_resume:
         state_path = checkpoints.latest(run_id)
         if state_path:
             print(f"resuming from checkpoint: {state_path}")
         else:
             print(f"no checkpoint found for {run_id}; starting a new run")
     if state_path:
-        _load_state(emu, state_path)
+        if auto_resume:
+            state_path = _load_resume_state(emu, checkpoints, run_id, state_path)
+        else:
+            _load_state(emu, state_path)
     audio = AudioSink(getattr(emu.sound, "sample_rate", 48_000))
     audio.set_muted(True)
     audio.set_speed(speed)
@@ -129,6 +140,8 @@ def run(
     pacer = FramePacer()
     last_save = time.monotonic()
     held_buttons = set()
+    human_input = None
+    human_input_until = 0.0
     autonomous_action = None
     pokemon_sprites = PokemonSprites(rom) if isinstance(adapter, Gold97Adapter) else None
     ui = LiveUI(screen, pokemon_sprites)
@@ -158,6 +171,8 @@ def run(
     def save_agent(reason):
         path = _save(emu, checkpoints, tracker, reason, store, journey)
         if controller:
+            controller.memory.world["route"] = journey.route.to_dict()
+            controller.memory.save()
             controller.memory.checkpoint(path)
         return path
 
@@ -182,8 +197,7 @@ def run(
         if not journey.restore_checkpoint(restored):
             journey.reset_view()
         if controller:
-            if not controller.memory.restore(restored):
-                controller.memory.reset()
+            _restore_agent(controller, restored, journey)
             controller.resume()
         metadata = store.checkpoint_metadata(restored) or {}
         for field in ("battles", "wins", "losses", "saves"):
@@ -200,7 +214,7 @@ def run(
     def action(name):
         nonlocal emu, audio, last_save, skip_exit_checkpoint, battles
         nonlocal autonomous, controller, collision_cache
-        nonlocal autonomous_action
+        nonlocal autonomous_action, human_input, human_input_until
         if name == "snapshot":
             save_agent("snapshot")
             last_save = time.monotonic()
@@ -232,7 +246,7 @@ def run(
             skip_exit_checkpoint = True
             add_thought("jev", "Restarted to title. Snapshot kept.")
         elif name == "game_save":
-            add_thought("jev", "Use Start → Save in game. Your game save persists on quit.")
+            add_thought("jev", "Use Start, then Save in game. Your game save persists on quit.")
         elif name == "toggle_jev" and isinstance(adapter, Gold97Adapter):
             if controller is None:
                 from .agent.factory import provider_from_env
@@ -248,6 +262,11 @@ def run(
                         controller.memory.reset()
             autonomous = not controller.playback.requested
             if autonomous:
+                for button in held_buttons:
+                    emu.button_release(button)
+                held_buttons.clear()
+                human_input = None
+                human_input_until = 0.0
                 controller.resume()
             else:
                 controller.manual_pause()
@@ -255,11 +274,19 @@ def run(
                     emu.button_release(autonomous_action)
                     autonomous_action = None
                 add_thought("jev", "Paused.")
+        elif name == "toggle_training" and controller:
+            enabled = controller.training.toggle()
+            add_thought("jev", "Training on: battle and heal along the journey." if enabled
+                        else "Training off: focus on the journey.")
         elif name == "toggle_luna" and controller:
             controller.strategy.toggle()
             if controller.strategy.enabled and controller.vision is None:
                 from .agent.gold97_vision import LunaScreenReader
-                controller.vision = LunaScreenReader()
+                if os.environ.get("JPP_LOCAL_VLM") == "1":
+                    from .agent.local_vision import LocalScreenReader
+                    controller.vision = LocalScreenReader()
+                else:
+                    controller.vision = LunaScreenReader()
             if autonomous_action is not None:
                 emu.button_release(autonomous_action)
                 autonomous_action = None
@@ -268,14 +295,20 @@ def run(
                 autonomous = True
         elif name == "retry_agent" and controller:
             controller.memory.experience.retry(controller.route.now)
+            for button in held_buttons:
+                emu.button_release(button)
+            held_buttons.clear()
+            human_input = None
+            human_input_until = 0.0
             controller.resume()
             autonomous = True
         elif name == "strategy_details":
             ui.strategy_details = not ui.strategy_details
-        elif (name == 'notebook' or name.startswith('notes_')) and controller:
-            if name == 'notebook' and not ui.notebook.open:
-                controller.manual_pause()
-                autonomous = False
+        elif (name == 'notebook' or name.startswith('notes_')
+              or name.startswith('agent_')) and controller:
+            opening = ((name == 'notebook' and not ui.notebook.open)
+                       or name.startswith('agent_open:'))
+            if opening:
                 for button in held_buttons:
                     emu.button_release(button)
                 held_buttons.clear()
@@ -283,10 +316,14 @@ def run(
                     emu.button_release(autonomous_action)
                     autonomous_action = None
             exported = ui.notebook.action(name, controller)
+            if (name in {"agent_guide", "agent_toggle_lean", "agent_replan"}
+                    and autonomous_action is not None):
+                emu.button_release(autonomous_action)
+                autonomous_action = None
             if exported:
                 add_thought('jev', f'Notes exported: {exported.name}')
-        elif name == "model_input":
-            ui.show_model_input = not ui.show_model_input
+        elif name == "toggle_feed":
+            ui.show_feed = not ui.show_feed
             ui.activity_scroll = 0
         elif name == "shortcuts":
             ui.show_shortcuts = not ui.show_shortcuts
@@ -338,14 +375,44 @@ def run(
             restore_stuck=restore_stuck,
             policy=ProviderPolicy(provider_from_env(provider_name)),
             vision_enabled=vision_enabled)
-        if state_path and not controller.memory.restore(state_path):
-            controller.memory.reset()
-        autonomous = controller.playback.requested
+        if state_path:
+            _restore_agent(controller, state_path, journey)
+        from .live_models import startup_requested
+        autonomous = startup_requested(provider_name, controller.playback.requested, autoplay)
         if autonomous:
             controller.resume()
+        else:
+            controller.manual_pause()
 
     try:
+        if runtime_bridge and controller:
+            runtime_bridge.rewind_point = save_agent("snapshot")
+            controller.memory.experience.add_operator_message("guide", runtime_bridge.session["goal"])
+            if not autonomous:
+                action("toggle_jev")
         while True:
+            if runtime_bridge:
+                for command in runtime_bridge.commands():
+                    if command.startswith("note:") and controller:
+                        controller.memory.experience.add_operator_message("remember", command[5:])
+                        continue
+                    if command == "stop":
+                        return
+                    if command in {"play", "pause"}:
+                        if (command == "play") != autonomous:
+                            action("toggle_jev")
+                    elif command == "rewind" and runtime_bridge.rewind_point:
+                        if autonomous:
+                            action("toggle_jev")
+                        restore_encounter(runtime_bridge.rewind_point)
+                        if controller:
+                            _restore_agent(controller, runtime_bridge.rewind_point, journey)
+                            controller.manual_pause()
+                    elif command in set(KEYS.values()):
+                        if autonomous:
+                            action("toggle_jev")
+                        emu.button(command, 4)
+                runtime_bridge.publish(emu, controller, autonomous)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
@@ -354,6 +421,17 @@ def run(
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         return
+                    if event.key in KEYS:
+                        human_input = KEYS[event.key]
+                        human_input_until = time.monotonic() + 0.35
+                        if takes_human_control(event.key, autonomous):
+                            autonomous = False
+                            if controller:
+                                controller.manual_pause()
+                            if autonomous_action is not None:
+                                emu.button_release(autonomous_action)
+                                autonomous_action = None
+                            add_thought("jev", "Human took control.")
                     previous_speed = speed
                     speed = handle_keydown(event, emu, held_buttons, action, speed)
                     if previous_speed != speed:
@@ -367,20 +445,14 @@ def run(
                         action(selected)
                 if event.type == pygame.MOUSEWHEEL:
                     ui.scroll_activity(pygame.mouse.get_pos(), event.y)
-            if held_buttons and autonomous:
-                autonomous = False
-                controller.manual_pause()
-                if autonomous_action is not None:
-                    emu.button_release(autonomous_action)
-                    autonomous_action = None
-                add_thought("jev", "Paused for manual control.")
-            _press_held_buttons(emu, held_buttons)
-            emu.tick()
+            game_frames = _frames_per_render(speed)
+            _press_held_buttons(emu, held_buttons, game_frames)
+            # Render once per display update while advancing the cartridge by
+            # the selected number of frames. Redrawing the entire dashboard at
+            # 240-480 FPS made the old 4x setting CPU-bound and only changed
+            # the label on typical machines.
+            emu.tick(game_frames, True)
             audio.feed(emu)
-            if isinstance(adapter, Gold97Adapter):
-                names = apply_requested_names(emu)
-                if names:
-                    add_thought("jev", "Named " + " and ".join(names) + ".")
             snapshot = adapter.snapshot(emu)
             state = snapshot.state
             terrain = (collision_cache.update(emu, state)
@@ -435,21 +507,21 @@ def run(
             else:
                 ui.map_entities = ()
             if isinstance(adapter, Gold97Adapter):
-                visible_overworld = (world_origin is not None or
-                                     overworld_ready(emu, state))
+                prompt = (visible_prompt(emu, state)
+                          if not state.in_battle else False)
+                visible_overworld = ((world_origin is not None or
+                                      overworld_ready(emu, state)) and not prompt)
                 control_overworld = visible_overworld and collision_cache.ready
                 if controller:
                     controller.route = journey.route
-                if controller and not autonomous:
-                    controller.observe(state, ui.map_entities, control_overworld, terrain)
-                if autonomous and controller:
+                if controller and (not autonomous or ui.notebook.open):
+                    controller.observe(state, ui.map_entities, control_overworld, terrain,
+                                       prompt_visible=visible_prompt(emu, state))
+                if autonomous and controller and not ui.notebook.open:
                     choice = controller.step(
                         state, frame=frame, entities=ui.map_entities,
                         overworld=control_overworld,
-                        prompt_visible=(visible_prompt(emu, state)
-                                        if collision_cache.ready and
-                                        not visible_overworld and not state.in_battle
-                                        else False),
+                        prompt_visible=prompt,
                         terrain=terrain)
                     if choice:
                         if autonomous_action is not None and autonomous_action != choice:
@@ -481,12 +553,14 @@ def run(
             if controller:
                 controller._poll_provider_health()
                 controller.strategy.poll_retired()
+                progress["training_enabled"] = controller.training.enabled
                 progress["strategy"] = controller.strategy.summary()
                 progress["play_requested"] = controller.playback.requested
                 progress["playback_status"] = controller.playback.summary()["status"]
                 progress["agent_paused"] = controller.paused
                 progress["action_source"] = controller.action_source
                 progress["model_input"] = controller.latest_model_input
+                progress["agent_state"] = controller.live_snapshot()
                 progress["tactical_auto"] = autonomous and not controller.paused
                 ui.strategy_summary = progress["strategy"]
             health = controller.provider_health if controller else "offline"
@@ -509,6 +583,23 @@ def run(
             progress["jev_available"] = progress["tactical_available"]
             progress["model_usage"] = (controller.usage_snapshot()
                                         if controller else {"jev": {}, "luna": {}})
+            progress["control_mode"] = player_control_mode(
+                autonomous,
+                paused=bool(controller and controller.paused),
+                inspector_open=ui.notebook.open,
+            )
+            if held_buttons:
+                progress["active_input"] = sorted(held_buttons)[0]
+                progress["input_source"] = "human"
+            elif human_input and time.monotonic() < human_input_until:
+                progress["active_input"] = human_input
+                progress["input_source"] = "human"
+            elif autonomous_action:
+                progress["active_input"] = autonomous_action
+                progress["input_source"] = "ai"
+            else:
+                progress["active_input"] = None
+                progress["input_source"] = None
             player = (visible_player(emu, state, world_origin=world_origin)
                       if world_origin is not None and collision_cache.ready else None)
             if player:
@@ -529,7 +620,7 @@ def run(
                     overworld=world_origin is not None, entities=ui.map_entities,
                     destination=ui.navigation_target)
             ui.draw(frame, progress, state, animation, thoughts, journey, battles)
-            pacer.wait(speed)
+            pacer.wait(1.0)
     finally:
         try:
             if not skip_exit_checkpoint:
@@ -562,8 +653,41 @@ def _save(emu, checkpoints, tracker, reason, store=None, journey=None):
     return path
 
 
+def _restore_agent(controller, path, journey):
+    """Restore the active route together with its checkpoint-owned notebook."""
+    if not controller.memory.restore(path):
+        controller.memory.reset()
+        # Journey's checkpoint may have route evidence even when the agent
+        # notebook predates checkpoint support. Preserve that exact restore.
+        controller.memory.world['route'] = journey.route.to_dict()
+        controller.memory.save()
+    if getattr(journey, "restored_checkpoint", None) == Path(path).resolve():
+        controller.memory.world["route"] = journey.route.to_dict()
+        controller.memory.save()
+    controller.route = RouteProgress.from_dict(controller.memory.world.get("route"))
+    journey.route = controller.route
+    journey.save_route()
+
+
 def _load_state(emu, path):
     """Load an emulator snapshot from disk without coupling callers to PyBoy I/O."""
     with Path(path).open("rb") as handle:
         emu.load_state(handle)
     release_restored_buttons(emu)
+
+
+def _load_resume_state(emu, checkpoints, run_id, preferred):
+    """Load the newest readable checkpoint, tolerating an interrupted write."""
+    candidates = [preferred] + [
+        path for path in checkpoints.candidates(run_id) if path != preferred
+    ]
+    for path in candidates:
+        try:
+            _load_state(emu, path)
+            if path != preferred:
+                print(f"checkpoint unreadable; resumed from: {path}")
+            return path
+        except Exception as error:
+            print(f"skipping unreadable checkpoint {path}: {error}")
+    print(f"no readable checkpoint found for {run_id}; starting a new run")
+    return None

@@ -3,20 +3,29 @@
 from .gold97_map_probe import probe_options
 from .gold97_navigation import frontier_step
 from .gold97_journey_nav import journey_step
-from .gold97_state import decision_state
-from ..route_progress import MAIN
-from .controller_constants import _MENU_COOLDOWN_FRAMES, _MOVE_HOLD_FRAMES, _STEPS
+from .controller_constants import _MENU_COOLDOWN_FRAMES, _MOVE_HOLD_FRAMES
+from .controller_choice import DecisionChoice
 
-class DecisionExecution:
+
+class DecisionExecution(DecisionChoice):
     def _navigate_step(self, state, *, frame=None, entities=(), overworld=True, terrain=None, prompt_visible=None):
         map_key = (state.map_group, state.map_number)
         key, position = self._location(state)
         strategy_active = (overworld and not state.in_battle and
-                           self.route.now is not None and self.route.now >= 3 and
+                           self.route.now is not None and
                            self.terrain is not None)
         training_required = self.training.required(state) if state.party else False
+        if (overworld and state.party and not training_required
+                and getattr(state, 'mechanics_verified', False)):
+            lead = self.training.travel_lead(state, self.terrain)
+            if self.party_reorder.start(state, lead):
+                self.held_action = None
+                self.cooldown = _MENU_COOLDOWN_FRAMES
+                return self.party_reorder.step(state, True)
         if (overworld and state.party and getattr(state, 'mechanics_verified', False)
-                and (not strategy_active or training_required)):
+                and training_required and self.terrain is not None
+                and (state.area_name in self.training.data.get('opponents', {})
+                     or self.terrain.tile((state.x, state.y)) in {0x10, 0x14, 0x18, 0x1C})):
             lead = self.training.lead(state)
             if self.party_reorder.start(state, lead):
                 self.held_action = None
@@ -116,115 +125,7 @@ class DecisionExecution:
                 options = visual or options
             action = self.movement_history.choose(key, position, options)
             options = {action: options[action]}
-        return self._decide_step(state, entities, overworld, options, note, key, position, strategy_active)
-
-    def _decide_step(self, state, entities, overworld, options, note, key, position, strategy_active):
-        body = decision_state(state, self.memory, note, key, position)
-        body["journey"] = self.strategy.context(state)
-        body["strategy"] = self.strategy.data.get("plan")
-        body["luna_enabled"] = self.strategy.enabled
-        step = self.route.now
-        if step is not None:
-            body["goal"] = f"Complete Journey step {step}: {MAIN[step]}"
-            body["journey_step"] = step
-        from .game_loop import GenericBranch
-        decision_key = (key, position, state.battle.kind,
-                        getattr(state.battle.opponent, "hp", None),
-                        tuple(options), str(note), self.route.now, self.strategy.generation)
-        if self.decision_future is None:
-            branch = GenericBranch(body["decision_kind"], body, options)
-            self.decision_key = decision_key
-            self.decision_future = self.executor.submit(self.policy.decide, branch)
-            return None
-        if not self.decision_future.done():
-            return None
-        if self.decision_key != decision_key:
-            self.decision_future = None
-            return None
-        try:
-            decision = self.decision_future.result()
-        except Exception as exc:
-            self.pause(f"{self._provider_label()} unavailable: {type(exc).__name__}")
-            self._set_provider_event(f"{self._provider_label()} error: {type(exc).__name__}")
-            return None
-        finally:
-            self.decision_future = None
-        self.last_decision = decision
-        if decision.request_made:
-            if decision.model_input:
-                self.latest_model_input = {
-                    "provider": self._provider_label(),
-                    **decision.model_input,
-                }
-                kind = body.get("decision_kind", "decision")
-                self._set_provider_event(
-                    f"{self._provider_label()} input · {kind} · "
-                    f"{', '.join(options)}"
-                )
-            self.usage.record(
-                self._tactical_usage_provider(),
-                input_tokens=decision.input_tokens,
-                output_tokens=decision.output_tokens,
-                total_tokens=decision.total_tokens,
-                latency_ms=decision.latency_ms,
-                actual_cost_usd=decision.actual_cost_usd,
-            )
-        if decision.option == "wait":
-            # Waiting is not a gameplay objective. Older Laya sidecars can still
-            # emit the retired token, so translate it to a legal forward input
-            # instead of letting the agent idle forever or treating it as a fatal
-            # policy error.
-            action = next((name for name in
-                           ("up", "down", "left", "right", "a", "b", "start")
-                           if name in options), None)
-            if action is None:
-                action = next(iter(options), "a")
-            self.wait_streak += 1
-            self._set_provider_event(f"{self._provider_label()} wait replaced with {action}")
-        elif decision.option not in options:
-            self.pause(f"{self._provider_label()} returned an invalid choice")
-            self._set_provider_event(f"{self._provider_label()} returned an invalid choice")
-            return None
-        else:
-            action = decision.option
-        if (action == "a" and not overworld and not state.in_battle
-                and getattr(state, "screen_cursor", None) is None):
-            action = self.dialogue.advance(state)
-            if action is None:
-                self.pause("Dialogue did not change after confirmation and cancel attempts. Inspect the screen, then Retry.")
-                return None
-        if decision.fell_back:
-            self.pause(f"{self._provider_label()} unavailable: {decision.reason}. Retry to reconnect.")
-            self.provider_health = "unavailable"
-            self.provider_health_error = decision.reason
-            self._set_provider_event(self.pause_reason)
-            return None
-        elif decision.option != "wait":
-            source = self._provider_label() if decision.request_made else "Executor (only legal action)"
-            self._set_provider_event(f"{source} chose {action}")
-        self.action_source = self._provider_label()
-        if strategy_active:
-            self.strategy.chosen(action)
-        if action != "wait":
-            self.wait_streak = 0
-        if action == "a":
-            self.interaction_positions.add(position)
-        adjacent_sprite = any(
-            abs(entity.pixel_x - state.x * 16) +
-            abs(entity.pixel_y - state.y * 16) == 16 for entity in entities
-        ) if state.x is not None and state.y is not None else False
-        if action == "a" and adjacent_sprite and overworld and self.save_encounter:
-            path = self.save_encounter()
-            if path:
-                self.memory.checkpoint(path)
-                self.encounter = {"checkpoint": path, "species_id": None,
-                                  "species": "", "map": key, "started": False}
-                self.pending_frames = 90
-        self.last = (key, position, action)
-        self.held_action = None if action == "wait" else action
-        self.cooldown = (_MOVE_HOLD_FRAMES if action in _STEPS
-                         else _MENU_COOLDOWN_FRAMES)
-        if state.in_battle or not overworld:
-            self.screen_note = None
-            self.vision_key = None
-        return None if action == "wait" else action
+        return self._decide_step(
+            state, entities, overworld, options, note, key, position,
+            strategy_active, frame=frame,
+        )
