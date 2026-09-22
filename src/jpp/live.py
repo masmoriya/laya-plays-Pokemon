@@ -54,7 +54,7 @@ def _press_held_buttons(emulator, held_buttons, frames=1):
 def run(
     rom: Path,
     state: Path | None = None,
-    run_id="run-001",
+    run_id="laya-tested",
     rules_path="config/game_rules.json",
     player_name=None,
     starter=None,
@@ -77,7 +77,7 @@ def run(
     pre_init_audio()
     pygame.init()
     screen = pygame.display.set_mode(SIZE, pygame.RESIZABLE)
-    pygame.display.set_caption("Jev Plays Games")
+    pygame.display.set_caption("Laya Plays Pokémon")
     checkpoints = CheckpointManager()
     emu = PyBoy(str(rom), window="null")
     emu.set_emulation_speed(0)
@@ -282,7 +282,7 @@ def run(
             controller.strategy.toggle()
             if controller.strategy.enabled and controller.vision is None:
                 from .agent.gold97_vision import LunaScreenReader
-                if os.environ.get("JPP_LOCAL_VLM") == "1":
+                if os.environ.get("LPP_LOCAL_VLM", os.environ.get("JPP_LOCAL_VLM")) == "1":
                     from .agent.local_vision import LocalScreenReader
                     controller.vision = LocalScreenReader()
                 else:
@@ -290,7 +290,8 @@ def run(
             if autonomous_action is not None:
                 emu.button_release(autonomous_action)
                 autonomous_action = None
-            if controller.paused and controller.pause_reason.startswith("Luna"):
+            if (controller.paused
+                    and controller.pause_reason.startswith(controller.strategy.label)):
                 controller.resume()
                 autonomous = True
         elif name == "retry_agent" and controller:

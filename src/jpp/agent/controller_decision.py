@@ -93,7 +93,8 @@ class DecisionExecution(DecisionChoice):
         note = self.screen_note if self.vision_key == (
             state.map_group, state.map_number, state.x, state.y,
             state.battle.kind, getattr(state.battle.opponent, "hp", None)) else None
-        # Laya uses Luna only for uncertain overworld navigation; ordinary text
+        # Laya uses the configured vision model only for uncertain overworld
+        # navigation; ordinary text
         # and battles continue from cartridge state without extra model calls.
         use_vision = (
             ((self.stalls >= 3 or self.movement_history.looping) and overworld) or

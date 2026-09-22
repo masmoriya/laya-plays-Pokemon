@@ -58,7 +58,8 @@ def strategy_context(self, state):
     hm_steps = hm_journey(state, scope)
     from ..journey_checklist import journey_steps
     prerequisite = prerequisite_context(state, scope)
-    return {"hm_journey": hm_steps, "navigation": navigation, "goal": goal, "directive": directive,
+    from .planner_world import world_context
+    return {"world": world_context(self.owner, state), "hm_journey": hm_steps, "navigation": navigation, "goal": goal, "directive": directive,
             "prerequisites": prerequisite,
             "journey_steps": journey_steps(hm_steps, prerequisite),
             "context_mode": "lean" if lean else "standard",
@@ -73,7 +74,7 @@ def strategy_context(self, state):
             "interactions": [{**npc, "pages": npc["pages"][-2:]}
                              for npc in list(self.data["npcs"].values())
                              if npc['map'] == f'{state.map_group:02X}:{state.map_number:02X}'][-4 if lean else -12:],
-            "team": {"training": self.owner.training.summary(state, self.owner.rewards.weights), "party": [{"species": m.species, "level": m.level, "hp": m.hp, "moves": list(m.moves)} for m in getattr(state, "party", ())],
+            "team": {"training": self.owner.training.summary(state, self.owner.rewards.weights), "party": [{"species": m.species, "level": m.level, "hp": m.hp, "max_hp": getattr(m, "max_hp", None), "status": getattr(m, "status", None), "moves": list(m.moves)} for m in getattr(state, "party", ())],
                      "rewards": self.owner.rewards.summary()},
             "connections": [c for c in self.data['connections']
                             if f'{state.map_group:02X}:{state.map_number:02X}' in (c['from'], c['to'])][-12:],
@@ -102,6 +103,9 @@ def strategy_summary(self):
     from ..journey_checklist import journey_steps
     prerequisite = prerequisite_context(getattr(self.observations, 'state', None), self.owner.route.now)
     return {"hm_journey": hm_steps, "enabled": self.enabled, "status": self.status,
+            "planner": self.label, "plan": plan,
+            "last_response": self.data.get("last_response"),
+            "error": getattr(self, "last_error", ""),
             "journey_steps": journey_steps(hm_steps, prerequisite),
             "lean_context": self.owner.memory.experience.lean_context(self.owner.route.now),
             "operator_guidance": self.owner.memory.experience.active_guide(self.owner.route.now),

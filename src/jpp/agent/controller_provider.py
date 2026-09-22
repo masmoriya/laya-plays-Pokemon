@@ -80,7 +80,8 @@ class ProviderLifecycle:
                 note = self.vision_future.result()
             except Exception as exc:
                 vision_error = f"{type(exc).__name__}: {exc}"
-                self.strategy.provider_failed(f"Luna screen reader: {type(exc).__name__}")
+                self.strategy.provider_failed(
+                    f"{self.strategy.label} screen reader: {type(exc).__name__}")
                 self.live.vision_finished(error=vision_error)
                 self.live.model_call("luna", status="error", error=str(exc), phase="vision")
                 note = {"mode": "unknown", "screen_text": [],
@@ -103,7 +104,7 @@ class ProviderLifecycle:
                 if note:
                     visible = " ".join(note.get("screen_text") or []).strip()
                     self._set_provider_event(
-                        f"Luna read {note['mode']}: {visible or '(no text)'}"
+                        f"{self.strategy.label} read {note['mode']}: {visible or '(no text)'}"
                     )
             self.vision_future = None
         if self.paused:
@@ -119,9 +120,9 @@ class ProviderLifecycle:
         model_input = getattr(self.vision, "model_input", None)
         if callable(model_input):
             payload = model_input(frame)
-            self.latest_model_input = {"provider": "Luna", **payload}
+            self.latest_model_input = {"provider": self.strategy.label, **payload}
             self.live.vision_started(frame, payload)
-            self._set_provider_event("Luna input · screen + image")
+            self._set_provider_event(f"{self.strategy.label} input · screen + image")
         self.vision_future = self.executor.submit(self.vision.describe, frame.copy())
         return None
 

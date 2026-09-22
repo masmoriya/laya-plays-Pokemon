@@ -182,6 +182,8 @@ class TickExecution:
             self.last = None
             self.cooldown = _MENU_COOLDOWN_FRAMES
             self._set_provider_event('Advance visible dialogue')
+            from .dialogue_capture import before_advance
+            before_advance(self, state, frame)
             return self.dialogue.advance(state, frame)
         key, position = self._location(state)
         self.navigation_target = None

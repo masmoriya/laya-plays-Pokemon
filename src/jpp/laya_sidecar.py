@@ -37,7 +37,7 @@ class LayaService:
         try:
             import laya
         except ImportError as exc:
-            raise RuntimeError("install the Laya extra with: uv sync --extra laya") from exc
+            raise RuntimeError("install Laya with: uv sync") from exc
         # Small, serial decisions suffer from CPU thread oversubscription on
         # the live game's host. Apply the budget before model initialization too.
         import torch

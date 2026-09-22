@@ -44,7 +44,7 @@ def run_gold97(session, directory):
     if source.is_dir():
         shutil.copytree(source, work / "config", dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("*.local.json"))
-    os.environ["JPP_LOCAL_VLM"] = "1"
+    os.environ["LPP_LOCAL_VLM"] = "1"
     os.environ.setdefault("LAYA_MODEL_PATH", str(model_home() / "multilingual"))
     if session["headless"]:
         os.environ["SDL_VIDEODRIVER"] = "dummy"

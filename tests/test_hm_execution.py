@@ -91,3 +91,15 @@ def test_teaching_will_not_replace_a_different_party_member():
     s.party = s.party[:1]
     teaching.step(s, False)
     assert teaching.error == 'Party changed during HM teaching'
+
+
+def test_teaching_does_not_fail_only_because_a_menu_frame_repeats():
+    s = hm_state()
+    teaching = HMTeaching()
+    assert teaching.start(s, 12)
+    teaching.phase = 'offer'
+    s.screen_lines = ('',) * 12 + ('Booted up an HM!',)
+    for _ in range(40):
+        teaching.step(s, False)
+    assert teaching.phase == 'offer'
+    assert teaching.error == ''

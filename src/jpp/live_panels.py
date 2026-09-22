@@ -3,6 +3,7 @@
 import pygame
 
 from .live_ui_colors import ACCENT, BG, GOOD, MUTED, PANEL, SURFACE, TEXT, WARN
+from .live_battle_panel import LiveBattlePanel
 from .live_map import LiveMap
 
 
@@ -10,6 +11,7 @@ class LivePanels:
     def __init__(self, ui):
         self.ui = ui
         self.map_panel = LiveMap(ui)
+        self.battle_panel = LiveBattlePanel(ui)
 
     def _panel(self, box, title):
         pygame.draw.rect(self.ui.canvas, PANEL, box, border_radius=6)
@@ -99,122 +101,4 @@ class LivePanels:
                          max_width=box.width - 28)
 
     def battle_view(self, state, journey):
-        opponent = getattr(getattr(state, "battle", None), "opponent", None)
-        own = getattr(getattr(state, "battle", None), "active", None)
-        label = getattr(state, "opponent_label", None)
-        trainer_class = getattr(state, "opponent_trainer_class", None)
-        if own is None and label and label != "Wild":
-            self._trainer_intro(label, trainer_class)
-        else:
-            self._opponent_entry(opponent, label, trainer_class)
-        self._active_battle_mon(own)
-        self._current_stage(journey)
-
-    def _trainer_intro(self, label, trainer_class):
-        box = pygame.Rect(994, 176, 422, 382)
-        self._panel(box, "Trainer battle")
-        self._trainer_sprite(trainer_class, pygame.Rect(box.x + 14, box.y + 48, 108, 108))
-        self.ui.text(label, (box.x + 134, box.y + 52), self.ui.body_bold, TEXT, max_width=272)
-        self.ui.text("Preparing their first Pokémon…", (box.x + 134, box.y + 80), self.ui.small, MUTED,
-                     max_width=272)
-
-    def _trainer_sprite(self, trainer_class, target):
-        provider = self.ui.pokemon_sprites
-        sprite = provider.trainer_frame(trainer_class) if provider and hasattr(provider, "trainer_frame") else None
-        if sprite is not None:
-            scaled = pygame.transform.scale(sprite, target.size)
-            self.ui.canvas.blit(scaled, target)
-        return sprite is not None
-
-    def _opponent_entry(self, mon, label, trainer_class=None):
-        box = pygame.Rect(994, 176, 422, 382)
-        self._panel(box, "Pokédex")
-        if mon is None:
-            self.ui.text("Opponent data unavailable", (box.x + 14, box.y + 54), self.ui.small, MUTED)
-            return
-        sprite = self.ui.pokemon_sprites.frame(mon.species) if self.ui.pokemon_sprites else None
-        has_trainer = trainer_class is not None
-        icon = pygame.Rect(box.x + 14, box.y + 42, 98 if has_trainer else 116,
-                           98 if has_trainer else 116)
-        if sprite is not None:
-            side = 94 if has_trainer else 108
-            scaled = pygame.transform.scale(sprite, (side, side))
-            self.ui.canvas.blit(scaled, scaled.get_rect(center=icon.center))
-        if has_trainer:
-            self._trainer_sprite(trainer_class, pygame.Rect(box.x + 112, box.y + 46, 88, 88))
-            text_x, text_width = box.x + 210, 196
-            self.ui.text(label or "Trainer", (text_x, box.y + 43), self.ui.small_bold, TEXT,
-                         max_width=text_width)
-            self.ui.text(mon.species, (text_x, box.y + 67), self.ui.body_bold, TEXT,
-                         max_width=text_width)
-        else:
-            text_x, text_width = box.x + 140, 264
-            self.ui.text(f"{label + ' · ' if label else ''}{mon.species}",
-                         (text_x, box.y + 43), self.ui.body_bold, TEXT, max_width=text_width)
-        hp, max_hp = getattr(mon, "hp", "?"), getattr(mon, "max_hp", "?")
-        self.ui.text(f"Lv {mon.level}  ·  HP {hp}/{max_hp}",
-                     (text_x, box.y + (91 if has_trainer else 68)), self.ui.small, TEXT,
-                     max_width=text_width)
-        status = getattr(mon, "status", "unknown")
-        types = getattr(mon, "types", ())
-        self.ui.text(f"Status · {str(status).title()}  ·  {', '.join(types) or 'Unavailable'}",
-                     (text_x, box.y + (113 if has_trainer else 91)), self.ui.tiny, MUTED,
-                     max_width=text_width)
-        facts = getattr(mon, "species_data", None)
-        if facts and facts.base_stats:
-            labels = ("HP", "Atk", "Def", "Spd", "SpA", "SpD")
-            values = "  ".join(f"{name} {value}" for name, value in zip(labels, facts.base_stats))
-            self.ui.text("Species stats", (box.x + 14, box.y + 172), self.ui.tiny, MUTED)
-            self.ui.text(values, (box.x + 14, box.y + 190), self.ui.tiny, TEXT, max_width=394)
-        else:
-            self.ui.text("Species stats · Unavailable", (box.x + 14, box.y + 180), self.ui.tiny, MUTED)
-        if facts and facts.entry:
-            measurement = f"{facts.category} · {facts.height // 100}'{facts.height % 100:02}\" · {facts.weight / 10:.1f} lb"
-            self.ui.text(measurement, (box.x + 14, box.y + 218), self.ui.tiny, ACCENT, max_width=394)
-            lines = self.ui.wrap(facts.entry, self.ui.small, 394)[:4]
-            for index, line in enumerate(lines):
-                self.ui.text(line, (box.x + 14, box.y + 240 + index * 19), self.ui.small, TEXT)
-        else:
-            self.ui.text("Pokédex entry · Unavailable", (box.x + 14, box.y + 222), self.ui.small, MUTED)
-        self._moves(box, getattr(mon, "moves", ()), getattr(mon, "pp", ()), box.bottom - 50, self.ui.tiny)
-
-    def _active_battle_mon(self, mon):
-        box = pygame.Rect(994, 570, 422, 160)
-        self._panel(box, "Your Pokémon")
-        if mon is None:
-            self.ui.text("Battle data unavailable", (box.x + 14, box.y + 47), self.ui.small, MUTED)
-            return
-        self.ui.text(f"{mon.species} · Lv {mon.level}", (box.x + 14, box.y + 39), self.ui.body_bold, TEXT)
-        hp, max_hp = getattr(mon, "hp", "?"), getattr(mon, "max_hp", "?")
-        self.ui.text(f"HP {hp}/{max_hp}  ·  {', '.join(getattr(mon, 'types', ())) or 'Unavailable'}",
-                     (box.x + 14, box.y + 65), self.ui.small, MUTED)
-        facts = getattr(mon, "species_data", None)
-        if facts and facts.base_stats:
-            labels = ("HP", "Atk", "Def", "Spd", "SpA", "SpD")
-            values = "  ".join(f"{name} {value}" for name, value in zip(labels, facts.base_stats))
-            self.ui.text("Species stats", (box.x + 14, box.y + 84), self.ui.tiny, MUTED)
-            self.ui.text(values, (box.x + 14, box.y + 99), self.ui.tiny, TEXT, max_width=394)
-            moves_top = box.y + 115
-        else:
-            moves_top = box.y + 98
-        self._moves(box, mon.moves, mon.pp, moves_top, self.ui.small)
-
-    def _moves(self, box, moves, pp_values, top, font):
-        for index, move in enumerate(moves[:4]):
-            column = pygame.Rect(box.x + 14 + index % 2 * 195, top + index // 2 * 24, 176, 20)
-            pp = pp_values[index] if index < len(pp_values) else "?"
-            self.ui.text(move.title(), column.topleft, font, TEXT, max_width=124)
-            pp_label = f"{pp} PP"
-            self.ui.text(pp_label, (column.right - font.size(pp_label)[0], column.y), font, TEXT)
-
-    def _current_stage(self, journey):
-        box = pygame.Rect(994, 742, 422, 78)
-        self._panel(box, "Journey")
-        item = (journey.route.display() if journey else {}).get("now")
-        if not item:
-            self.ui.text("Current step unavailable", (box.x + 14, box.y + 41), self.ui.small, MUTED)
-            return
-        for index, line in enumerate(self.ui.wrap(f"{item[0]}. {item[1]}", self.ui.small_bold, box.width - 28)[:2]):
-            self.ui.text(line, (box.x + 14, box.y + 34 + index * self.ui.small_bold.get_linesize()), self.ui.small_bold, TEXT)
-        self.ui.button("confirm_stage", "Confirm", pygame.Rect(box.right - 156, box.bottom - 28, 78, 22), GOOD)
-        self.ui.button("undo_stage", "Undo", pygame.Rect(box.right - 70, box.bottom - 28, 56, 22), MUTED)
+        self.battle_panel.draw(state, journey)

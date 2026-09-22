@@ -16,7 +16,10 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
         self.owner = controller
         self.default_enabled = enabled
         self.provider = provider or JourneyStrategyProvider()
-        knowledge(controller.memory, enabled)
+        data = knowledge(controller.memory, enabled)
+        if getattr(self.provider, "required", False):
+            data["enabled"] = enabled
+            data["plan"] = None
         self.observations = JourneyKnowledge(controller.memory)
         self.future = None
         self.generation = 0
@@ -41,6 +44,14 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
         self.recovery_retry_at = 0
 
     @property
+    def label(self):
+        return getattr(self.provider, "label", "Luna")
+
+    @property
+    def required(self):
+        return self.enabled and getattr(self.provider, "required", False)
+
+    @property
     def data(self):
         return knowledge(self.owner.memory, self.default_enabled)
 
@@ -55,10 +66,14 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
                             for kind, future in self.retired))
 
     def provider_failed(self, reason):
+        self.last_error = reason
+        if getattr(self, "plan_has_image", False):
+            self.owner.live.vision_finished(error=reason)
         self.provider_failures += 1
         self.retry_at = monotonic() + min(30, 2 ** min(self.provider_failures, 5))
-        self.status = 'Laya fallback'
-        self.owner._set_provider_event(reason + '; continuing with Laya')
+        self.status = 'retrying' if self.required else 'Laya fallback'
+        suffix = '; movement held; retrying planner' if self.required else '; continuing with Laya'
+        self.owner._set_provider_event(reason + suffix)
 
     def invalidate(self):
         self.recovery_retry_at = 0
@@ -95,7 +110,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
         self.owner.vision_future = None
         self.status = "idle" if self.enabled else "off"
         record(self.owner.memory, "mode_change", self.status)
-        self.owner._set_provider_event(f"Luna strategy {'On' if self.enabled else 'Off'}")
+        self.owner._set_provider_event(f"{self.label} strategy {'On' if self.enabled else 'Off'}")
 
     def failed(self, reason):
         target = self.target or self.last_transition_target
@@ -188,7 +203,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
                 if not future.cancel():
                     self.retired.append(("plan", future))
                 self.owner.memory.experience.record('planner_timeout', deadline=deadline)
-                self.provider_failed(f"Luna planning exceeded {deadline:g} seconds")
+                self.provider_failed(f"{self.label} planning exceeded {deadline:g} seconds")
                 return self.options(state, terrain)
             future, self.future = self.future, None
             try:
@@ -202,18 +217,24 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning):
                 detail = str(exc).strip().replace("\n", " ")[:120]
                 suffix = f": {detail}" if detail else ""
                 self.provider_failed(
-                    f"Luna strategy unavailable: {type(exc).__name__}{suffix}")
+                    f"{self.label} strategy unavailable: {type(exc).__name__}{suffix}")
                 self.owner.live.model_call(
                     "luna", status="error", error=detail, phase="strategy"
                 )
                 return self.options(state, terrain)
             self.target = next(c for c in self.payload["candidates"] if c["id"] == plan["target"])
             self.data["plan"] = plan
+            self.accepted_dialogue_key = getattr(self, "plan_dialogue_key", None)
+            self.data["last_response"] = {**plan, "goal": self.payload.get("goal")}
             self.owner.memory.experience.record('planner_accepted', plan=plan, usage=usage)
             self.status = "ready"
+            self.last_error = ""
+            if getattr(self, "plan_has_image", False):
+                self.owner.live.vision_finished({"mode": "planning", "screen_text": [],
+                                                "uncertainty": plan["explanation"]})
             self.provider_failures = 0
             record(self.owner.memory, "plan", plan["explanation"])
-            self.owner._set_provider_event(f"Next: {plan['explanation']}")
+            self.owner._set_provider_event(f"{self.label} -> Laya: {plan['explanation']}")
             return self.options(state, terrain)
         return self.plan_next(state, terrain, durable)
 

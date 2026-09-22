@@ -17,6 +17,9 @@ class JourneyPlanning:
         direct = next((target for target in available if target['kind'] == 'talk'
                        and target.get('category') != 'obstacle'
                        and target.get('journey_reward', 0) > current_reward), None)
+        if direct and self.required:
+            self.invalidate()
+            return
         if direct:
             self.invalidate()
             self.target, self.status = direct, 'ready'
@@ -24,6 +27,8 @@ class JourneyPlanning:
                                  'completion': direct['completion'], 'evidence': [direct['id']]}
 
     def plan_next(self, state, terrain, durable):
+        if self.required and not self.use_luna:
+            return {}
         if monotonic() < self.recovery_retry_at:
             return {}
         recovering = False
@@ -103,7 +108,7 @@ class JourneyPlanning:
             or ((top.get('goal_destination') or top.get('goal_interaction'))
                 and top.get("journey_reward", 0) >= milestone_reward)
         )
-        if (top_priority
+        if (not self.required and top_priority
                 and runner_up < top["journey_reward"]):
             self.target = top
             self.status = "ready"
@@ -123,18 +128,31 @@ class JourneyPlanning:
             model_input = getattr(self.provider, "model_input", None)
             if callable(model_input):
                 self.owner.latest_model_input = {
-                    "provider": "Luna",
+                    "provider": self.label,
                     **model_input(self.payload),
                 }
                 self.owner._set_provider_event(
-                    f"Luna input · strategy · {len(available)} candidates"
+                    f"{self.label} input · strategy · {len(available)} candidates"
                 )
-            self.future = self.owner.executor.submit(self.provider.plan, self.payload)
+            visual = getattr(self.provider, "plan_visual", None)
+            frame = getattr(self.owner, "planning_frame", None)
+            self.plan_has_image = callable(visual) and frame is not None
+            if self.plan_has_image:
+                frame = frame.copy()
+                self.owner.live.vision_started(frame, self.owner.latest_model_input)
+                self.owner._set_provider_event(f"{self.label} planning with game image")
+                pages = getattr(self.owner, "dialogue_captures", [])
+                self.plan_dialogue_key = (pages[-1]['map'], pages[-1]['signature']) if pages else None
+                fresh = self.plan_dialogue_key != getattr(self, 'accepted_dialogue_key', None)
+                recent_frames = [p['frame'] for p in pages[-1:] if fresh and p['frame'] is not None]
+                self.future = self.owner.executor.submit(visual, self.payload, frame, recent_frames)
+            else:
+                self.future = self.owner.executor.submit(self.provider.plan, self.payload)
             self.owner.memory.experience.record('planner_request', payload=self.payload,
                                                  model=getattr(self.provider, 'model', None))
             return {}
         # Laya receives all reachable tasks; it selects the task and its next legal
-        # control together. No Luna-produced plan remains active in this mode.
+        # control together. No model-produced plan remains active in this mode.
         options = {}
         self.local_targets = {}
         for target in available:

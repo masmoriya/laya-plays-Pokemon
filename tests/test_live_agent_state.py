@@ -132,10 +132,10 @@ def test_agent_panel_hides_zero_usage_and_visual_controls_are_not_click_targets(
             {"tactical_provider": "laya", "tactical_label": "Laya",
              "tactical_available": True, "control_mode": "ai",
              "active_input": "a", "input_source": "ai",
-             "strategy": {"enabled": True},
+             "strategy": {"enabled": True, "planner": "Qwen", "status": "ready"},
              "model_usage": {"laya": {"calls": 0}, "luna": {"calls": 0}}},
         )
-        assert "Laya playing" in rendered and "Luna on" in rendered
+        assert "Laya playing · Qwen ready" in rendered
         assert not any("0 call" in value or "unavailable" in value.lower() for value in rendered)
         assert "toggle_jev" in ui.actions
         assert not {"up", "down", "left", "right", "a", "b", "start", "select"} & ui.actions.keys()

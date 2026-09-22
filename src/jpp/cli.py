@@ -1,4 +1,4 @@
-"""`jpp state | probe | play | overlay`."""
+"""`lpp state | probe | play | overlay`."""
 
 import argparse
 import json
@@ -183,7 +183,7 @@ def _overlay_feed(emu):
     """
     from .overlay import Overlay
 
-    overlay = Overlay("jev plays pokemon")
+    overlay = Overlay("laya plays pokémon")
     labelled: list[dict] = []
 
     def feed(record):
@@ -208,7 +208,7 @@ def _frame_capture(out: Path, every: int):
     from .overlay import Overlay
 
     out.mkdir(parents=True, exist_ok=True)
-    overlay = Overlay("jev plays pokemon", live=True)
+    overlay = Overlay("laya plays pokémon", live=True)
     seen: list[dict] = []
     count = [0, 0]
 
@@ -247,14 +247,8 @@ def cmd_overlay(args):
 
 
 def main(argv=None):
-    import sys
-    incoming = list(sys.argv[1:] if argv is None else argv)
-    if incoming and incoming[0] == "universal":
-        from .universal import main as universal_main
-        return universal_main(incoming[1:])
-    parser = argparse.ArgumentParser(prog="jpp")
+    parser = argparse.ArgumentParser(prog="lpp")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("universal", help="play a managed GB/GBC save with the local vision runtime")
 
     from .live import add_parser as add_live_parser
 

@@ -130,6 +130,8 @@ class DecisionChoice:
         )
         if (action == "a" and not overworld and not state.in_battle
                 and getattr(state, "screen_cursor", None) is None):
+            from .dialogue_capture import before_advance
+            before_advance(self, state, frame)
             action = self.dialogue.advance(state, frame)
         if decision.fell_back:
             self.pause(f"{self._provider_label()} unavailable: {decision.reason}. Retry to reconnect.")

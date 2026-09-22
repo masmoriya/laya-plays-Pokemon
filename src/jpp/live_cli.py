@@ -9,7 +9,10 @@ def add_parser(sub):
     parser = sub.add_parser("live", help="play locally with keyboard and compact run HUD")
     parser.add_argument("--rom", required=True, type=Path)
     parser.add_argument("--state", type=Path)
-    parser.add_argument("--run-id", default="run-001")
+    parser.add_argument(
+        "--run-id", default="laya-tested",
+        help="checkpoint and memory namespace (default: laya-tested)",
+    )
     parser.add_argument("--rules", default="config/game_rules.json")
     parser.add_argument("--player-name", help="override configured player name")
     parser.add_argument("--starter", help="preferred starter species, overrides rule order")

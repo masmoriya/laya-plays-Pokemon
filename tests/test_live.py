@@ -134,7 +134,9 @@ def test_live_resumes_snapshots_by_default_and_can_start_fresh():
     sub = parser.add_subparsers(dest="command", required=True)
     add_parser(sub)
 
-    assert parser.parse_args(["live", "--rom", "game.gbc"]).resume is True
+    defaults = parser.parse_args(["live", "--rom", "game.gbc"])
+    assert defaults.resume is True
+    assert defaults.run_id == "laya-tested"
     assert parser.parse_args(["live", "--rom", "game.gbc", "--new"]).resume is False
     assert parser.parse_args(["live", "--rom", "game.gbc", "--native-save"]).native_save
 

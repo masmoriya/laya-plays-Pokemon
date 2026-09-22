@@ -93,7 +93,7 @@ def fit(font, text: str, width: int) -> str:
 
 
 class Overlay:
-    def __init__(self, caption="jev plays pokemon", live=True):
+    def __init__(self, caption="laya plays pokémon", live=True):
         pygame.init()
         pygame.display.set_caption(caption)
         self.screen = pygame.display.set_mode((W, H))

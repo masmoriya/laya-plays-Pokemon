@@ -18,10 +18,10 @@ def test_startup_choice_overrides_checkpoint(provider, restored, choice, expecte
 
 
 def test_explicit_nonlocal_modes(monkeypatch):
-    monkeypatch.setenv("JPP_LOCAL_VLM", "1")
+    monkeypatch.setenv("LPP_LOCAL_VLM", "1")
     monkeypatch.setenv("LAYA_VISION", "1")
     assert prepare_models("laya", "off") == "laya"
-    assert __import__("os").environ["JPP_LOCAL_VLM"] == "0"
+    assert __import__("os").environ["LPP_LOCAL_VLM"] == "0"
     assert __import__("os").environ["LAYA_VISION"] == "0"
 
 
@@ -34,17 +34,17 @@ def test_live_options():
 
 
 def test_local_reuses_healthy_server(monkeypatch):
-    from laya_runtime.client import ModelClient
-    monkeypatch.setenv("JPP_LOCAL_VLM", "0")
+    from jpp.local_model import LocalModelClient
+    monkeypatch.setenv("LPP_LOCAL_VLM", "0")
     monkeypatch.setenv("LAYA_VISION", "0")
-    monkeypatch.setattr(ModelClient, "health", lambda self: {"status": "ok"})
+    monkeypatch.setattr(LocalModelClient, "health", lambda self: {"status": "ok"})
     monkeypatch.setattr("subprocess.run", lambda *a, **k: pytest.fail("must reuse server"))
     assert prepare_models("laya") == "laya"
 
 
 def test_local_starts_with_configured_interpreter(monkeypatch):
-    from laya_runtime.client import ModelClient
-    monkeypatch.setenv("JPP_LOCAL_VLM", "0")
+    from jpp.local_model import LocalModelClient
+    monkeypatch.setenv("LPP_LOCAL_VLM", "0")
     monkeypatch.setenv("LAYA_VISION", "0")
     monkeypatch.setenv("LAYA_VLM_PYTHON", "/dedicated/python")
     calls = []
@@ -52,7 +52,7 @@ def test_local_starts_with_configured_interpreter(monkeypatch):
         if not calls:
             raise ConnectionError("offline")
         return {"status": "ok"}
-    monkeypatch.setattr(ModelClient, "health", health)
+    monkeypatch.setattr(LocalModelClient, "health", health)
     monkeypatch.setattr("subprocess.run", lambda argv, **kwargs: calls.append((argv, kwargs)))
     prepare_models("laya")
     assert calls[0][0][0] == "/dedicated/python"

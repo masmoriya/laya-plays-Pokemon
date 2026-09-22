@@ -46,7 +46,10 @@ class HMTeaching:
         frame = (tuple(state.screen_lines), state.screen_cursor, getattr(state, 'party_cursor', None))
         self.repeats = self.repeats + 1 if frame == self.last else 0
         self.last = frame
-        if self.ticks > 120 or self.repeats > 16:
+        # Text printing and menu transitions can leave the decoded frame unchanged
+        # across many controller polls. A repeated frame is not proof that teaching
+        # failed; wait for the bounded overall attempt instead.
+        if self.ticks > 360:
             self.error, self.phase = f"Could not verify teaching {plan['move']}", 'close'
         if self.phase == 'close':
             if overworld or self.ticks > 140:

@@ -119,12 +119,13 @@ def test_activity_uses_available_space_and_scrolls_to_older_events():
         entries = [f"Event {index}" for index in range(40)]
         progress = {"tactical_provider": "laya", "model_usage": {"laya": {"calls": 2,
                     "input_tokens": 123, "output_tokens": 4}, "luna": {"calls": 1,
-                    "input_tokens": 6, "output_tokens": 7}}}
+                    "input_tokens": 6, "output_tokens": 7}},
+                    "strategy": {"enabled": True, "planner": "Qwen"}}
         ui._thoughts({"laya": entries}, Animation(), progress)
         assert "Event 39" in rendered
         assert "Event 0" not in rendered
         assert any("Laya · 2 calls · 127 tokens" in line for line in rendered)
-        assert any("Luna · 1 call · 13 tokens" in line for line in rendered)
+        assert any("Qwen · 1 call · 13 tokens" in line for line in rendered)
         ui._dest = pygame.Rect(0, 0, *SIZE)
         ui.scroll_activity(ui.activity_bounds.center, 20)
         rendered.clear()

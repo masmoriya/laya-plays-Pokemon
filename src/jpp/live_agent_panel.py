@@ -39,16 +39,25 @@ class LiveAgentPanel:
         activity = (progress.get('agent_state') or {}).get('activity') or {}
         if activity.get('kind') == 'thinking':
             ui.text(f"{activity.get('provider', 'Model')} thinking…",
-                    (box.x + 14, box.y + 15), ui.tiny, ACCENT)
-        elif strategy.get("enabled"):
-            ui.text("Luna on", (box.x + 14, box.y + 15), ui.tiny, ACCENT)
+                    (box.x + 14, box.y + 15), ui.tiny, ACCENT,
+                    max_width=box.width - 104)
+        else:
+            mode = progress.get("control_mode", "human")
+            agent = progress.get("tactical_label", "Laya")
+            agent_status = {"ai": "playing", "paused": "paused", "human": "manual"}[mode]
+            planner = strategy.get("planner", "Luna")
+            planner_status = strategy.get("status", "on") if strategy.get("enabled") else "off"
+            ui.text(f"{agent} {agent_status} · {planner} {planner_status}",
+                    (box.x + 14, box.y + 15), ui.tiny,
+                    WARN if mode == "paused" else ACCENT,
+                    max_width=box.width - 104)
         if activity and activity.get('kind') != 'thinking':
             ui.text(activity.get('phase', ''), (box.x + 14, box.y + 82),
                     ui.tiny, MUTED, max_width=box.width - 28)
         self._usage(progress.get("model_usage"), progress.get("tactical_provider", "jev"),
-                    box.y + 43)
+                    box.y + 43, strategy.get("planner", "Luna"))
 
-    def _usage(self, usage, tactical_provider, top):
+    def _usage(self, usage, tactical_provider, top, planner="Luna"):
         ui, box = self.ui, self.box
         rendered = 0
         for provider in (tactical_provider, "luna"):
@@ -58,7 +67,7 @@ class LiveAgentPanel:
                 continue
             tokens = int(stats.get("total_tokens") or
                          (stats.get("input_tokens") or 0) + (stats.get("output_tokens") or 0))
-            label = f"{provider.title()} · {calls} call{'s' if calls != 1 else ''}"
+            label = f"{planner if provider == 'luna' else provider.title()} · {calls} call{'s' if calls != 1 else ''}"
             if tokens:
                 label += f" · {tokens:,} tokens"
             latency = float(stats.get("latency_ms") or 0)
@@ -96,6 +105,25 @@ class LiveAgentPanel:
             top += 64
         recent = [item for item in state.get("decisions", ())[1:]
                   if item.get("sequence") != decision.get("sequence")][:4]
+        strategy = progress.get("strategy") or {}
+        plan = strategy.get("plan") or strategy.get("last_response") or {}
+        if strategy.get("enabled"):
+            ui.text(f"{strategy.get('planner', 'Luna')} -> Laya" + (" (last reply)" if not strategy.get('plan') and plan else ""), (box.x + 14, top + 4), ui.tiny, ACCENT)
+            summary = plan.get("explanation") or strategy.get("error") or strategy.get("status", "Awaiting plan")
+            reply_lines = ui.wrap(summary, ui.small, box.width - 28)
+            for index, line in enumerate(reply_lines):
+                ui.text(line, (box.x + 14, top + 24 + index * 20), ui.small, TEXT)
+            top += 30 + len(reply_lines) * 20
+            recent = recent[:2]
+        vision = state.get("vision") or {}
+        frame = vision.get("frame")
+        if frame is not None:
+            surface = pygame.surfarray.make_surface(frame[:, :, :3].swapaxes(0, 1))
+            ui.canvas.blit(pygame.transform.scale(surface, (64, 58)), (box.x + 14, top))
+            ui.button("agent_open:Vision", "Vision " + vision.get("status", ""),
+                      pygame.Rect(box.x + 84, top + 12, box.width - 98, 28), MUTED)
+            top += 66
+            recent = []
         if recent:
             ui.text("Recent", (box.x + 14, top + 4), ui.tiny, MUTED)
             top += 25

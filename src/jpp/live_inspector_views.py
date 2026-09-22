@@ -67,7 +67,9 @@ def _context(ui, panel):
         panel.provider = providers[0]
     top = BOX.y + 106
     for index, provider in enumerate(providers):
-        ui.button("agent_provider:" + provider, provider.title(),
+        label = ((panel.progress.get("strategy") or {}).get("planner", "Luna")
+                 if provider == "luna" else provider.title())
+        ui.button("agent_provider:" + provider, label,
                   pygame.Rect(BOX.x + 18 + index * 74, top, 66, 25),
                   TEXT if panel.provider == provider else MUTED)
     ui.button("agent_context_mode", "Compact" if panel.raw_context else "Raw",
@@ -164,10 +166,15 @@ def _compact_context(model_input):
 def _vision(ui, panel):
     vision = ((panel.progress.get("agent_state") or {}).get("vision"))
     if not vision:
-        ui.text("No Luna vision call yet", (BOX.x + 18, BOX.y + 118), ui.small, MUTED)
+        planner = (panel.progress.get("strategy") or {}).get("planner", "Luna")
+        ui.text(f"No {planner} vision call yet", (BOX.x + 18, BOX.y + 118), ui.small, MUTED)
         return
     ui.text(vision.get("status", "unknown").title(), (BOX.x + 18, BOX.y + 112),
             ui.small, GOOD if vision.get("status") == "completed" else WARN)
+    context = (vision.get("model_input") or {}).get("state") or {}
+    if context.get("world"):
+        ui.text("Game image + map, party, Pokédex and journey", (BOX.x + 18, BOX.y + 134),
+                ui.tiny, MUTED)
     frame = vision.get("frame")
     if frame is not None:
         image = pygame.surfarray.make_surface(frame.swapaxes(0, 1)[:, :, :3])

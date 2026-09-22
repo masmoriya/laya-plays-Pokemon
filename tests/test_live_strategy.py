@@ -16,7 +16,7 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
         ui = LiveUI(pygame.display.set_mode(SIZE))
         progress = {"tactical_available": True, "tactical_label": "Laya",
                     "tactical_auto": False, "agent_paused": True,
-                    "strategy": {"enabled": True}}
+                    "strategy": {"enabled": True, "planner": "Qwen"}}
         labels = []
         text = ui.text
 
@@ -27,7 +27,7 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
         ui.text = capture
         ui._footer(progress)
         assert "Training off" in labels
-        assert "Luna on" in labels
+        assert "Qwen on" in labels
         assert "Guide" in labels and "Context" in labels
         rectangles = list(ui.actions.items())
         for i, (name, rect) in enumerate(rectangles):
@@ -40,7 +40,7 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
         progress["training_enabled"] = True
         progress["strategy"]["enabled"] = False
         ui._footer(progress)
-        assert "Luna off" in labels
+        assert "Qwen off" in labels
         assert "Training on" in labels
         labels.clear()
         progress.update(control_mode="paused")
@@ -51,5 +51,32 @@ def test_strategy_toggle_retry_and_play_have_separate_hit_targets():
                                'rewards':{'points':25,'recent':[]},'intent':'Training Hoppip'}
         draw_strategy(ui, pygame.Rect(0,0,450,500), 10)
         assert '25 points · Training Hoppip' in labels
+    finally:
+        pygame.quit()
+
+
+def test_qwen_plan_and_usage_are_visible():
+    os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+    pygame.init()
+    try:
+        ui = LiveUI(pygame.display.set_mode(SIZE))
+        labels = []
+        original = ui.text
+
+        def capture(value, *args, **kwargs):
+            labels.append(value)
+            original(value, *args, **kwargs)
+
+        ui.text = capture
+        progress = {'control_mode': 'ai', 'tactical_provider': 'laya',
+                    'strategy': {'enabled': True, 'planner': 'Qwen', 'status': 'ready',
+                                 'plan': {'explanation': 'Follow the observed lead'}},
+                    'model_usage': {'luna': {'calls': 1, 'total_tokens': 123}}}
+        ui._footer(progress)
+        ui._thoughts({'laya': []}, Animation(), progress)
+        assert 'Qwen on' in labels
+        assert 'Qwen -> Laya' in labels
+        assert 'Follow the observed lead' in labels
+        assert 'Qwen · 1 call · 123 tokens' in labels
     finally:
         pygame.quit()

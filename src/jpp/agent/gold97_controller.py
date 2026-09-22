@@ -36,7 +36,7 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
                  vision=None, vision_enabled=True, save_encounter=None,
                  restore_encounter=None, restore_stuck=None, strategy_provider=None):
         import os
-        if os.environ.get("JPP_LOCAL_VLM") == "1":
+        if os.environ.get("LPP_LOCAL_VLM", os.environ.get("JPP_LOCAL_VLM")) == "1":
             from .local_vision import LocalJourneyProvider, LocalScreenReader
             if vision is None and vision_enabled:
                 vision = LocalScreenReader()
@@ -186,6 +186,7 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
             # A rendered prompt wins over stale sprite/map RAM. Never let
             # journey navigation run behind a dialogue box.
             overworld = False
+        self.planning_frame = frame
         self.last_decision = None
         if overworld or state.in_battle:
             self.dialogue.reset()
@@ -202,7 +203,7 @@ class Gold97Controller(ProviderLifecycle, NavigationExecution, ServiceExecution,
             self._provider_label() if action and self.last_decision and self.last_decision.request_made else
             "deterministic execution" if action else
             "paused" if self.paused else
-            "awaiting Luna" if self.strategy.future else
+            f"awaiting {self.strategy.label}" if self.strategy.future else
             f"awaiting {self._provider_label()}" if self.decision_future else "idle")
         if action:
             payload = self.last_decision.model_input if self.last_decision else None

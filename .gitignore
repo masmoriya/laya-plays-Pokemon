@@ -16,7 +16,9 @@ demo/*.mp4
 __pycache__/
 .venv/
 .pytest_cache/
+._*
 /config/laya.local.json
+/models/
 # Local model checkpoints are too large for the repository. Keep them external.
 *.safetensors
 **/qwen*/

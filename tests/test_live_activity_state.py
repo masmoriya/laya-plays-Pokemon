@@ -9,7 +9,7 @@ from jpp.agent.live_activity import activity
 
 def owner():
     return NS(paused=False, decision_future=None, vision_future=None,
-              strategy=NS(future=None, payload=None), route=NS(now=11),
+              strategy=NS(future=None, payload=None, label='Qwen'), route=NS(now=11),
               _provider_label=lambda: 'Laya', provider_health='ready',
               held_action=None, pending_options={'yes': 'Board the ferry'})
 
@@ -23,7 +23,7 @@ def test_pending_work_is_visible_and_completion_clears_thinking(kind):
     setattr(target, field, future)
     status = activity(controller)
     assert status['kind'] == 'thinking'
-    assert status['provider'] == ('Laya' if kind == 'decision' else 'Luna')
+    assert status['provider'] == ('Laya' if kind == 'decision' else 'Qwen')
     assert status['elapsed_seconds'] >= 0
     if kind == 'decision':
         assert status['options'] == ['Board the ferry']
@@ -79,3 +79,12 @@ def test_panel_replaces_stale_battle_with_actual_pending_work(monkeypatch, tmp_p
         assert not any('thinking' in text for text in rendered)
     finally:
         pygame.quit()
+
+
+def test_duplicate_option_labels_do_not_hide_distinct_options():
+    controller = owner()
+    controller.strategy.future = Future()
+    controller.strategy.payload = {'candidates': [
+        {'id': str(i), 'label': label} for i, label in enumerate(
+            ['Talk to sprite', 'Talk to sprite', 'Talk to sprite', 'Leave gym'])]}
+    assert activity(controller)['options'] == ['Talk to sprite', 'Leave gym']

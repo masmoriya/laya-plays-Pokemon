@@ -48,5 +48,5 @@ def controls(ui, progress):
     enabled = progress["strategy"]["enabled"]
     ui.button("agent_open:Guide", "Guide", pygame.Rect(910, 1026, 70, 30))
     ui.button("agent_open:Context", "Context", pygame.Rect(988, 1026, 82, 30))
-    ui.button("toggle_luna", f"Luna {'on' if enabled else 'off'}",
+    ui.button("toggle_luna", f"{progress['strategy'].get('planner', 'Luna')} {'on' if enabled else 'off'}",
               pygame.Rect(1078, 1026, 94, 30), TEXT if enabled else MUTED)

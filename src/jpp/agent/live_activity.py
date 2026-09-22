@@ -9,8 +9,8 @@ def activity(owner):
     if not owner.paused:
         for future, provider, phase in (
             (owner.decision_future, owner._provider_label(), 'Choosing an action'),
-            (owner.strategy.future, 'Luna', 'Planning the next task'),
-            (owner.vision_future, 'Luna', 'Reading the screen'),
+            (owner.strategy.future, getattr(owner.strategy, 'label', 'Luna'), 'Planning the next task'),
+            (owner.vision_future, getattr(owner.strategy, 'label', 'Luna'), 'Reading the screen'),
         ):
             if future is not None and not future.done():
                 work = future, provider, phase
@@ -20,9 +20,10 @@ def activity(owner):
         if getattr(owner, '_visible_work', None) is not future:
             owner._visible_work, owner._visible_work_started = future, monotonic()
         payload = owner.strategy.payload or {}
-        tasks = [c.get('label', c['id']) for c in payload.get('candidates', [])][:3]
+        tasks = [c.get('label', c['id']) for c in payload.get('candidates', [])]
         if future is owner.decision_future:
-            tasks = list(getattr(owner, 'pending_options', {}).values())[:3]
+            tasks = list(getattr(owner, 'pending_options', {}).values())
+        tasks = list(dict.fromkeys(tasks))[:3]
         return {'kind': 'thinking', 'provider': provider, 'phase': phase,
                 'elapsed_seconds': monotonic() - owner._visible_work_started,
                 'goal': MAIN.get(owner.route.now, 'Continue journey'), 'options': tasks}
