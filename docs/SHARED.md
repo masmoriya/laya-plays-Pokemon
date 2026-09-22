@@ -19,7 +19,7 @@ gap hunt):
 
 | Repo | One line | Niche | Headline number to measure | Visual |
 |---|---|---|---|---|
-| `jev-plays-pokemon` | Pokemon Red on PyBoy, Jev picks at branches, code owns the goal stack and pathfinding | thin (two 0-1 star repos, one is battles only) | decisions/sec and $/hour, plus a running Brier score | live probability bars over the emulator |
+| `Laya-Plays-Pokémon` | Pokémon Red on PyBoy, Laya picks at branches, code owns the goal stack and pathfinding | thin (two 0-1 star repos, one is battles only) | decisions/sec and $/hour, plus a running Brier score | live probability bars over the emulator |
 | `jev.nvim` | grep where the pattern is a question; one noul per function into quickfix | empty | functions judged per call, $ per query, p50 latency | screencast of `:Jev ...` filling quickfix |
 | `jev-skip` | YouTube sponsor/intro/recap skipper with a probability heatmap on the seek bar | empty | agreement with SponsorBlock crowd labels on n videos, and time-to-first-coverage on unlabeled videos | heatmap painting the seek bar, skip firing |
 | `jev-belay` | Stop hook that blocks unverified "done", loop detection, escalate-only permission gate | thin (limpet 1 star; pi-warden's depth exists for Pi only) | false-block rate over n real sessions, caught false dones | the "Done, blocked, tests fail, fixed, Done" clip |

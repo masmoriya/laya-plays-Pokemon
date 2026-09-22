@@ -349,7 +349,7 @@ def _replay_source(path: Path, include_stand_ins=False):
 def run_replay(path: Path, rate: float = 2.0, include_stand_ins=False):
     """Play a run file back so the clip can be recorded with no ROM in sight."""
     records, labelled = _replay_source(path, include_stand_ins)
-    overlay = Overlay(f"jev-plays-pokemon: {path.name}", live=False)
+    overlay = Overlay(f"Laya Plays Pokémon: {path.name}", live=False)
     index, next_at = 0, 0.0
     running = True
     while running:

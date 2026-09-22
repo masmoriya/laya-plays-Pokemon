@@ -96,4 +96,4 @@ the existing `JevPlaysPokemon` line:
 - [<new name>](https://github.com/valentynkit/<new name>) - Pokémon Red on PyBoy where code owns the route and Jev is asked only at branches, with per-option probability bars over the live game and a Brier score on "faints this turn".
 ```
 
-The repo name is still open. `jev-plays-pokemon` is taken by milanboers.
+The repo is now published as `Laya-Plays-Pokémon`.

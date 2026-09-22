@@ -1,4 +1,4 @@
-# jev-plays-pokemon-red
+# Laya Plays Pokémon
 
 > Public stream identity: **Laya Plays Pokémon — Jev’s offline sister AI.**
 
@@ -116,9 +116,12 @@ AGENT_PROVIDER=laya uv run jpp live --provider laya --rom 'Gold 97 Reforged v6.1
 
 The sidecar binds to `127.0.0.1:8765` by default. Set `LAYA_BASE_URL`, `LAYA_TIMEOUT_S`,
 or `LAYA_MIN_CONFIDENCE` for the game client; the default accepts any legal, schema-valid
-choice. Set a positive confidence threshold only when you explicitly want stricter gating.
+choice. Inference allows 30 seconds by default; health probes remain capped at 3 seconds.
+Set a positive confidence threshold only when you explicitly want stricter gating.
 Set `LAYA_HOST`, `LAYA_PORT`, `LAYA_MODEL`, and `LAYA_DEVICE` for the sidecar. It never
-downloads model weights while gameplay is running.
+downloads model weights while gameplay is running. CPU computation uses one thread
+by default to avoid contention with the emulator; override with `LAYA_CPU_THREADS`
+or `cpu_threads` in the local settings.
 
 For an existing checkpoint on an external drive, create the ignored machine-local
 `config/laya.local.json` instead of downloading it again:
@@ -128,9 +131,13 @@ For an existing checkpoint on an external drive, create the ignored machine-loca
 ```
 
 Environment variables override these local settings. Keep the drive mounted.
+After updating sidecar code, restart the separately running `laya-sidecar` process.
+Health checks require `context_packing_version: 1` before gameplay resumes. Busy model
+workers reject extra requests instead of queuing decisions whose clients have timed out.
 
 When a model path is configured, the game client starts a local sidecar automatically if the
-configured endpoint is not listening. Set `LAYA_AUTOSTART=0` to keep the sidecar as a
+configured endpoint is not listening. Cold startup allows 120 seconds (override with
+`LAYA_STARTUP_TIMEOUT_S`). Set `LAYA_AUTOSTART=0` to keep the sidecar as a
 separately managed process. Without a downloaded checkpoint, the live panel reports the
 missing `LAYA_MODEL_PATH` instead of hiding the setup problem behind a bare connection error.
 
@@ -168,8 +175,8 @@ uv run jpp live --rom '/path/to/your/game.gbc' --speed 1
 ```
 
 Arrows move. `Z` = A, `X` = B, `Enter` = Start, `Right Shift` = Select. `-` and `+`
-step through 0.25x, 0.5x, 1x, 2x, 3x, and 4x; `1` selects 1x, `2` selects 2x, and `0`
-also resets to 1x. `V` toggles audio mute. `F1` reveals the shortcut panel on demand. `Ctrl-S` writes a rotating snapshot under `data/checkpoints/`, and `Ctrl-R` restores the latest one.
+step through 1x, 2x, 4x, and 8x; `1`, `2`, `4`, and `8` select a speed directly, and `0`
+resets to 1x. `V` toggles audio mute. `F1` reveals the shortcut panel on demand. `Ctrl-S` writes a rotating snapshot under `data/checkpoints/`, and `Ctrl-R` restores the latest one.
 A checkpoint is also written when you quit normally, when a badge is earned, and about
 every two minutes while you play. The resizable dashboard shows the game at its original
 aspect ratio, authentic Gold 97 party front sprites when available, HP/level/held items,

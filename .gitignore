@@ -17,4 +17,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 /config/laya.local.json
+# Local model checkpoints are too large for the repository. Keep them external.
+*.safetensors
+**/qwen*/
 demo/*-draft.*

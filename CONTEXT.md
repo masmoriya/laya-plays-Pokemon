@@ -1,4 +1,4 @@
-# jev-plays-pokemon
+# Laya-Plays-Pokémon
 
 Builds on `docs/SHARED.md`. Cites `docs/research/01` (API, testing), `02` section 5 (questions),
 `03` section 5 (prior art), `04` (README, recording, launch), `00c` section E, `00d` (gap).
@@ -314,7 +314,7 @@ Layout: `src/jpp/{symbols,decode,facts,goals,route,options,policy,loop,overlay,m
 ## 7. README skeleton
 
 ```
-# jev-plays-pokemon
+# Laya-Plays-Pokémon
 
 Pokemon Red, played at <N> decisions per second for <$X> an hour, with the
 model's calibration measured instead of assumed.

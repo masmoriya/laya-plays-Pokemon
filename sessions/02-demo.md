@@ -1,7 +1,7 @@
 # Session prompt: the demo, the clip, and the X post
 
 Run this after `sessions/01-review.md` has landed and ideally after a ROM run exists.
-Point a fresh Claude Code session at this file from inside `jev-plays-pokemon/`.
+Point a fresh Claude Code session at this file from inside `Laya-Plays-Pokémon/`.
 
 ## Context to load first
 
