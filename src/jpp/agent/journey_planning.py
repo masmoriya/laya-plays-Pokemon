@@ -46,7 +46,20 @@ class JourneyPlanning:
                                  'completion': direct['completion'], 'evidence': [direct['id']]}
 
     def plan_next(self, state, terrain, durable):
+        # Map collision data is briefly unavailable after a cartridge map
+        # transition while Gold97CollisionCache samples the new map. Planning
+        # during that window can omit collision-gated routes (including Surf)
+        # and ask Qwen to choose from an incomplete list of exits.
+        if getattr(state, 'mechanics_verified', False) and terrain is None:
+            if self.status != 'waiting_for_terrain':
+                self.owner._set_provider_event(
+                    'Waiting for current map collision data before planning'
+                )
+            self.status = 'waiting_for_terrain'
+            return {}
         if self.required and not self.use_luna:
+            return {}
+        if self.required and self.future and not self.future.done():
             return {}
         if monotonic() < self.recovery_retry_at:
             return {}
@@ -76,6 +89,29 @@ class JourneyPlanning:
         if not available:
             available = self.recovery_candidates(state, terrain)
             recovering = bool(available)
+        if not available:
+            # When every reachable lead was excluded by remembered failures,
+            # retry those approaches once at this exact map position and
+            # evidence revision. New movement or story evidence permits a
+            # later retry; an unchanged dead end cannot spin on the same door.
+            failures = self.owner.memory.experience.failures(self.owner.route.now)
+            retry_key = (key, position, evidence_stamp(
+                self.owner.memory, self.owner.route.now, key))
+            if failures and retry_key not in self.empty_retry_keys:
+                self.empty_retry_keys.add(retry_key)
+                self.owner.memory.experience.retry(self.owner.route.now)
+                self.excluded.clear()
+                self.data.pop('blocker', None)
+                available = candidates(
+                    state, self.owner.memory, terrain,
+                    excluded=self.excluded,
+                    reward_weights=self.owner.rewards.weights,
+                )
+                recovering = bool(available)
+                if available:
+                    self.owner._set_provider_event(
+                        'Rechecking reachable routes after exhausting remembered approaches'
+                    )
         if not available:
             # Keep observing and retry transient obstacles without spinning
             # model requests or requiring a manual resume.
@@ -125,10 +161,24 @@ class JourneyPlanning:
         self.payload = deepcopy(self.payload)
         milestone_reward = self.owner.rewards.weights["milestone"]
         top = available[0]
-        if self.shared_control and len(available) == 1:
-            # Laya owns the movement choice; Qwen adds no route decision here.
+        if len(available) == 1:
+            # Commit the sole reachable subgoal. Returning its first movement
+            # action without a target makes the frontier recompute every tile;
+            # partial visibility can then alternate between adjacent camera
+            # viewpoints forever instead of finishing the route approach.
+            self.target = top
+            self.local_targets = {
+                action: top for action in target_options(top, state, self.owner.memory, terrain)
+                if action != 'a'
+            }
             self.status = 'ready'
-            return self.local_options(state, terrain, available)
+            self.data['selection_source'] = 'Route continuation'
+            self.data['plan'] = {'target': top['id'], 'explanation': top['label'],
+                                 'completion': top['completion'], 'evidence': [top['id']]}
+            self.data['plan_review'] = 'Only one reachable subgoal; committed until observed'
+            record(self.owner.memory, 'journey_priority', top['label'],
+                   reward=top.get('journey_reward', 0))
+            return self.options(state, terrain)
         top_choice = (("exit", top.get("destination_key"))
                       if top.get("kind") == "exit" and top.get("destination_key")
                       else ("target", top["id"]))
@@ -178,13 +228,27 @@ class JourneyPlanning:
             self.plan_has_image = callable(visual) and frame is not None
             if self.plan_has_image:
                 frame = frame.copy()
+                overview = None
+                snapshot = getattr(self.owner.map_state, 'snapshot', None)
+                from .navigation_overview import render_navigation_overview
+                if snapshot is not None and not self.owner.map_state.status:
+                    overview = render_navigation_overview(
+                        snapshot.terrain, state, self.owner.memory,
+                        (self.payload.get('travel') or {}).get('next_map'))
+                context = self.owner.latest_model_input.setdefault('context', {})
+                context['map_overview'] = {
+                    'attached': overview is not None,
+                    'map': f'{state.map_group:02X}:{state.map_number:02X}',
+                    'size': list(overview.size) if overview is not None else None,
+                }
                 self.owner.live.vision_started(frame, self.owner.latest_model_input)
                 self.owner._set_provider_event(f"{self.label} planning with game image")
                 pages = getattr(self.owner, "dialogue_captures", [])
                 self.plan_dialogue_key = (pages[-1]['map'], pages[-1]['signature']) if pages else None
                 fresh = self.plan_dialogue_key != getattr(self, 'accepted_dialogue_key', None)
                 recent_frames = [p['frame'] for p in pages[-1:] if fresh and p['frame'] is not None]
-                self.future = self.owner.executor.submit(visual, self.payload, frame, recent_frames)
+                self.future = self.owner.executor.submit(visual, self.payload, frame,
+                                                         recent_frames, overview)
             else:
                 self.future = self.owner.executor.submit(self.provider.plan, self.payload)
             self.plan_id = self.owner.memory.experience.record('planner_request', payload=self.payload,

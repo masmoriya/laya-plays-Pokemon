@@ -4,6 +4,7 @@ from dataclasses import replace
 from test_navigation_continuity import owner, state, terrain
 from jpp.agent.journey_targets import candidates, target_options
 from jpp.agent.navigation_policy import preferred_targets
+from jpp.agent.journey_guidance import rank_interactions
 from jpp.agent.object_memory import classify, close_interaction, eligible
 from jpp.agent.local_vision import LocalJourneyProvider
 from jpp.terrain_capture import OverworldSprite
@@ -17,6 +18,27 @@ def test_collectibles_survive_travel_filter_and_emergency_retreat_wins():
     assert preferred_targets([route, item, tree]) == [item, tree]
     retreat = {'id': 'retreat', 'retreat_reason': 'Recover health'}
     assert preferred_targets([route, item, retreat]) == [retreat]
+
+
+def test_unidentified_sprite_does_not_earn_objective_interaction_reward():
+    sprite = {'id': 'sprite', 'kind': 'talk', 'category': 'npc', 'journey_reward': 28}
+    recheck = {'id': 'recheck', 'kind': 'explore', 'category': 'npc',
+               'reobserve_interaction': True, 'journey_reward': 2}
+    reward = 100
+    ranked = rank_interactions([sprite, recheck], reward)
+    assert sprite['journey_reward'] == 28
+    assert recheck['journey_reward'] == 2
+    assert not sprite.get('investigation_priority')
+    assert 'evidence connects it to the goal' in sprite['reward_reason']
+
+
+def test_verified_goal_interaction_and_pickup_keep_reward_priority():
+    person = {'id': 'goal-person', 'kind': 'talk', 'category': 'npc',
+              'goal_interaction': True, 'journey_reward': 28}
+    item = {'id': 'item', 'kind': 'talk', 'category': 'item', 'journey_reward': 25}
+    rank_interactions([person, item], 100)
+    assert person['journey_reward'] == 60
+    assert item['journey_reward'] == 300
 
 
 def test_resource_requires_result_and_remains_solid_after_harvest(owner):

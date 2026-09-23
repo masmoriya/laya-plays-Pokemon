@@ -52,15 +52,18 @@ class FieldAction:
         self.phase = None
         self.error = ''
 
-    def start(self, state, npc, memory):
+    def start(self, state, npc, memory, *, preferred_move=None, direction=None):
         choices = experiments(state, npc, memory)
+        if preferred_move:
+            chosen = normalized(preferred_move).replace('_', ' ')
+            choices = [choice for choice in choices if choice[1] == chosen]
         if not choices:
             npc['last_result'] = 'No untried relevant field move in the observed party'
             memory.save()
             return False
         self.slot, self.move = choices[0]
         self.npc, self.memory = npc, memory
-        self.direction = getattr(state, 'player_facing', None)
+        self.direction = direction or getattr(state, 'player_facing', None)
         attempt(npc, evidence_key(state, npc, memory), f'field:{self.slot}:{self.move}')
         self.phase, self.ticks, self.last, self.repeats = 'start', 0, None, 0
         self.error = ''

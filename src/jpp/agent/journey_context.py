@@ -29,8 +29,9 @@ def strategy_context(self, state):
     goal = MAIN.get(self.owner.route.now, "Journey complete")
     directive = (
         f"A verified Journey milestone is worth "
-        f"{self.owner.rewards.weights['milestone']} reward points. Choose the highest "
-        "Journey-reward candidate unless current evidence makes it unsafe or unreachable. "
+        f"{self.owner.rewards.weights['milestone']} reward points. Treat reward as one "
+        "signal alongside direct goal progress, route distance, new areas, and evidence. "
+        "Prefer a reachable candidate that advances the active goal when its route is clear. "
         "Follow the travel route. Dialogue is an observation, not automatically a quest or unfinished task. "
         "Only pursue dialogue that gives concrete evidence for the current objective. "
         "An interaction is not proof that an obstacle is resolved. "
@@ -78,13 +79,44 @@ def strategy_context(self, state):
             "interactions": [{**npc, "pages": npc["pages"][-2:]}
                              for npc in list(self.data["npcs"].values())
                              if npc['map'] == f'{state.map_group:02X}:{state.map_number:02X}'][-4 if lean else -12:],
-            "team": {"training": self.owner.training.summary(state, self.owner.rewards.weights), "party": [{"species": m.species, "level": m.level, "hp": m.hp, "max_hp": getattr(m, "max_hp", None), "status": getattr(m, "status", None), "moves": list(m.moves)} for m in getattr(state, "party", ())],
+            "team": {"training": self.owner.training.summary(state, self.owner.rewards.weights), "party": [{
+                        "species": m.species, "level": m.level, "hp": m.hp,
+                        "max_hp": getattr(m, "max_hp", None), "status": getattr(m, "status", None),
+                        "types": list(getattr(m, "types", ())), "stats": list(getattr(m, "stats", ())),
+                        "moves": list(m.moves), "pp": list(getattr(m, "pp", ())),
+                        "max_pp": list(getattr(m, "max_pp", ())),
+                        "held_item": getattr(m, "held_item", None),
+                    } for m in getattr(state, "party", ())],
                      "rewards": self.owner.rewards.summary()},
+            "battle": _battle_context(state),
             "connections": [c for c in self.data['connections']
                             if f'{state.map_group:02X}:{state.map_number:02X}' in (c['from'], c['to'])][-12:],
             "recent": self.data["events"][-2 if lean else -12:],
-            "questions": ["Which candidate has the strongest verified Journey reward?",
+            "questions": ["Which candidate best advances the active goal from this location?",
                           "What observable result proves progress toward this milestone?"]}
+
+
+def _battle_context(state):
+    battle = getattr(state, 'battle', None)
+    if battle is None:
+        return {"kind": "none"}
+
+    def mon(value):
+        if value is None:
+            return None
+        return {"species": getattr(value, "species", None),
+                "level": getattr(value, "level", None), "hp": getattr(value, "hp", None),
+                "max_hp": getattr(value, "max_hp", None), "status": getattr(value, "status", None),
+                "types": list(getattr(value, "types", ())), "stats": list(getattr(value, "stats", ())),
+                "moves": list(getattr(value, "moves", ())), "pp": list(getattr(value, "pp", ())),
+                "stages": list(getattr(value, "stages", ())) }
+
+    return {"kind": getattr(battle, "kind", "none"), "active": mon(getattr(battle, "active", None)),
+            "opponent": mon(getattr(battle, "opponent", None)),
+            "active_slot": getattr(state, "active_slot", None),
+            "menu": getattr(state, "battle_menu_kind", None),
+            "escape_allowed": getattr(state, "escape_allowed", None),
+            "switch_allowed": getattr(state, "switch_allowed", None)}
 
 
 def strategy_summary(self):

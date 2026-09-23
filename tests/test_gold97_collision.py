@@ -1,6 +1,16 @@
 from types import SimpleNamespace
 
-from jpp.gold97_collision import Gold97CollisionCache, Gold97CollisionMap
+from jpp.gold97_collision import (Gold97CollisionCache, Gold97CollisionMap,
+                                  controller_state_ready)
+
+
+def test_autonomy_waits_for_collision_refresh_except_battles_and_dialogue():
+    state = type('State', (), {'in_battle': False})()
+    assert not controller_state_ready(False, state)
+    assert controller_state_ready(True, state)
+    assert controller_state_ready(False, state, prompt_visible=True)
+    state.in_battle = True
+    assert controller_state_ready(False, state)
 
 
 class Memory(dict):

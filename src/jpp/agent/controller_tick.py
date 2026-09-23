@@ -129,7 +129,31 @@ class TickExecution:
             self.held_action = action if action in _STEPS and overworld else None
             self.cooldown = _MOVE_HOLD_FRAMES if self.held_action else _MENU_COOLDOWN_FRAMES
             if field.phase is None:
-                self.strategy.invalidate()
+                surf = self.strategy.target
+                tile = (self.terrain.tile((state.x, state.y))
+                        if self.terrain is not None and state.x is not None and state.y is not None
+                        else None)
+                from ..gold97_collision import _WATER
+                if (getattr(field, 'move', None) == 'SURF' and not field.error and surf
+                        and surf.get('surf_activation') and tile in _WATER):
+                    exit_cell = surf['target_cell']
+                    self.strategy.target = {
+                        **surf, 'id': f"geometry:{surf['map']}:{exit_cell[0]}:{exit_cell[1]}:{surf['direction']}",
+                        'kind': 'exit', 'cell': list(exit_cell), 'surf_activation': False,
+                        'direction': '', 'label': f"Cross to {surf['destination']}",
+                        'completion': f"Observe arrival in {surf['destination']}",
+                    }
+                    self.strategy.status = 'ready'
+                    self.memory.experience.record('surf_activated',
+                        destination=surf.get('destination_key'), position=[state.x, state.y])
+                    self.memory.save()
+                else:
+                    if getattr(field, 'move', None) == 'SURF' and not field.error:
+                        field.error = 'Surf activation did not place the player on water'
+                    if surf and surf.get('surf_activation'):
+                        self.strategy.failed(field.error or 'Surf activation failed')
+                    else:
+                        self.strategy.invalidate()
                 if field.error:
                     self._set_provider_event(field.error)
             return action

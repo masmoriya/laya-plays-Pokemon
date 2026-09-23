@@ -53,6 +53,24 @@ def test_owned_learned_badge_and_ready_are_distinct():
     assert 'ready for field use' in surf['steps'][-1]['label']
 
 
+def test_boxed_quagsire_surf_capability_becomes_an_explicit_teaching_task():
+    from jpp.agent.hm_preparation import preparation
+    state = observed('Surf')
+    state.owned_hms = ('Surf',)
+    state.party = [SimpleNamespace(identity='quagsire-1', species='QUAGSIRE',
+                                   moves=['Mud Slap', 'Mist', 'Slam'],
+                                   species_data=SimpleNamespace(field_moves=('Surf',)))]
+    result = preparation(state, 20)
+    assert result['action'] == 'teach'
+    assert result['move'] == 'Surf'
+    assert result['next'] == 'Teach Surf to QUAGSIRE'
+    assert not next(row for row in capabilities(state, 20)
+                    if row['name'] == 'Surf')['ready']
+    state.party[0].moves.append('Surf')
+    assert next(row for row in capabilities(state, 20)
+                if row['name'] == 'Surf')['ready']
+
+
 def test_unknown_cartridge_never_claims_completion_or_selects_acquisition():
     state = observed()
     state.mechanics_verified = False

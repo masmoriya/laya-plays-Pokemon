@@ -25,10 +25,10 @@ _BADGE_STEPS = {5: 1, 10: 2, 15: 3, 21: 4, 32: 5, 39: 6, 44: 7}
 # Gold 97's Brass Tower interior spans group 3, while the actual top is a
 # separate roof map. Reaching an interior floor is not proof of completing step 4.
 BRASS_TOWER_ROOF = (14, 10)
-_MAP_COMPLETIONS = {4: BRASS_TOWER_ROOF}
+_MAP_COMPLETIONS = {4: BRASS_TOWER_ROOF, 24: (0x13, 0x0D)}
 _ARRIVALS = {
     1: "Silent Town", 3: "Pagota City",
-    9: "Westport City", 11: "Teknos City", 17: "Birdon Town", 23: "Sunpoint City",
+    9: "Westport City", 11: "Teknos City", 17: "Birdon Town", 22: "Sunpoint City",
     18: "Slowpoke Well B1F",
     31: "Alloy City", 38: "Blue Forest", 43: "Stand City",
     61: "Kanto", 87: "Westport Docks", 94: "Amami Town",
@@ -75,6 +75,16 @@ class RouteProgress:
         for step, target in _ARRIVALS.items():
             if target == area or (target == "Kanto" and "Kanto" in area):
                 self.completed.add(step)
+        # Sunpoint City and its Docks are separate objectives. Older route
+        # tracking marked both complete on city arrival, leaving no active
+        # destination to guide exploration toward the ship.
+        if area == "Sunpoint City":
+            if 23 not in self.manual_history:
+                self.completed.discard(23)
+            self.completed.add(22)
+        if ((getattr(state, 'map_group', None), getattr(state, 'map_number', None)) == (0x13, 0x0A)
+                or area == "Sunpoint Docks"):
+            self.completed.add(23)
 
         from .field_moves import capabilities
         self.field_moves = capabilities(state, self.now)

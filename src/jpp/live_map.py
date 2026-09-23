@@ -36,7 +36,8 @@ class LiveMap:
             self._area(state, journey, view)
         from .live_map_markers import draw_marker
         for label, category, offset in (("NPC", "npc", 0), ("Item", "item", 70),
-                                        ("Object", "obstacle", 133), ("Unknown", "unknown", 218)):
+                                        ("Object", "obstacle", 133), ("Unknown", "unknown", 218),
+                                        ("Warp", "warp", 290)):
             x = box.x + 19 + offset
             draw_marker(self.ui, (x, box.bottom-49), category)
             self.ui.text(label, (x+9, box.bottom-57), self.ui.tiny, MUTED)
@@ -81,15 +82,29 @@ class LiveMap:
         size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
         target = pygame.Rect(0, 0, *size)
         target.center = view.center
-        self.ui.canvas.blit(pygame.transform.scale(self._terrain.subsurface(source), size), target)
+        crop = self._terrain.subsurface(source)
+        rendered = (pygame.transform.scale(crop, size) if size[0] < crop.get_width()
+                    or size[1] < crop.get_height()
+                    else pygame.transform.scale_by(crop, scale))
+        self.ui.canvas.blit(rendered, target)
         snapshot = self.ui.map_state.snapshot
         if snapshot:
             self.grid.overlays(snapshot, target)
 
     def _source_rect(self, state, columns, rows):
-        """Return the complete observed map; the game view is already the close-up."""
+        """Show a readable neighborhood around the current tile."""
         width, height = columns * 8, rows * 8
-        return pygame.Rect(0, 0, width, height)
+        x, y = getattr(state, "x", None), getattr(state, "y", None)
+        if x is None or y is None:
+            return pygame.Rect(0, 0, width, height)
+
+        # Keep enough surrounding terrain to navigate while preventing large maps
+        # from being reduced to a few indistinct pixels in the compact panel.
+        visible_width, visible_height = min(width, 224), min(height, 160)
+        center_x, center_y = x * 16 + 8, y * 16 + 8
+        left = max(0, min(width - visible_width, center_x - visible_width // 2))
+        top = max(0, min(height - visible_height, center_y - visible_height // 2))
+        return pygame.Rect(left, top, visible_width, visible_height)
 
     @staticmethod
     def _opaque_surface(rgba, size):

@@ -6,7 +6,13 @@ from .journey_exits import _area_name
 from .journey_guidance import _terms, _GENERIC, _OPTIONAL
 
 
-def rank_known_routes(targets, state, memory, goal, reward):
+def rank_known_routes(targets, state, memory, goal, reward, *, required_next_map=None):
+    # The pinned itinerary is authoritative when available. This graph is
+    # inferred from previously traversed exits and can send a multi-stop goal
+    # back toward an earlier town named in the same objective. On long routes
+    # that also hides the frontier toward the actual next gate.
+    if required_next_map:
+        return targets
     if not _terms(goal) & {'city', 'town', 'gate', 'route', 'port', 'mine', 'gym', 'tower', 'forest', 'cave', 'aquarium'}:
         return targets
     data = memory.world['journey_strategy']

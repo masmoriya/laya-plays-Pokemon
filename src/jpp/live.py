@@ -12,7 +12,7 @@ from .character.character_state import CharacterState
 from .audio import AudioSink, pre_init as pre_init_audio
 from .game_adapter import adapter_for_rom
 from .gold97_adapter import Gold97Adapter
-from .gold97_collision import Gold97CollisionCache
+from .gold97_collision import Gold97CollisionCache, controller_state_ready
 from .frame_pacer import FramePacer
 from .agent.gold97_controller import Gold97Controller
 from .agent.gold97_input import renew_movement, press_action, release_restored_buttons
@@ -523,7 +523,16 @@ def run(
                 if controller and (not autonomous or ui.notebook.open):
                     controller.observe(state, ui.map_entities, control_overworld, terrain,
                                        prompt_visible=visible_prompt(emu, state))
-                if autonomous and controller and not ui.notebook.open:
+                autonomous_state_ready = controller_state_ready(
+                    collision_cache.ready, state, prompt_visible=prompt)
+                if (autonomous and controller and not ui.notebook.open
+                        and not autonomous_state_ready and autonomous_action is not None):
+                    # Do not carry the exit input through a warp or plan from
+                    # the previous map while its collision blocks are stale.
+                    emu.button_release(autonomous_action)
+                    autonomous_action = None
+                if (autonomous and controller and not ui.notebook.open
+                        and autonomous_state_ready):
                     choice = controller.step(
                         state, frame=frame, entities=ui.map_entities,
                         overworld=control_overworld,

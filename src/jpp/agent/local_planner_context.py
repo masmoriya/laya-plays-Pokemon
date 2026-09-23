@@ -21,8 +21,10 @@ def planner_context(payload):
         'operator_notes', 'route_progress', 'failed_attempts', 'recent', 'navigation_memory', 'progress')))
     result['candidates'] = [select(item, ('id', 'kind', 'cell', 'direction', 'reentry', 'label', 'completion',
         'journey_reward', 'reward_reason', 'destination_key', 'prerequisite',
-        'goal_route', 'goal_interaction', 'destination_evidence', 'path_steps',
-        'category')) for item in payload['candidates'][:8]]
+        'goal_route', 'goal_interaction', 'travel_route', 'route_destination',
+        'destination_evidence', 'path_steps', 'category', 'route_frontier',
+        'unvisited_destination', 'reward_reason', 'reobserve_interaction'))
+        for item in payload['candidates'][:8]]
     result['unfinished_interactions'] = [select(item, ('id', 'cell', 'category', 'name',
         'visible', 'status', 'outcome', 'reachability')) for item in payload.get('interactions', [])
         if item.get('status') == 'pending'][:8]
@@ -37,6 +39,8 @@ def planner_context(payload):
     travel = payload.get('travel') or {}
     result['travel'] = compact(select(travel, ('destination', 'next_map', 'next_stop', 'instruction')))
     result['travel']['route'] = travel.get('route', [])[:12]
+    result['travel']['exits'] = [select(edge, ('to', 'name', 'cell', 'direction', 'instruction'))
+                                 for edge in travel.get('exits', [])[:12]]
     result['connections'] = compact(payload.get('connections', [])[-4:])
     world = payload.get('world') or {}
     result['world'] = select(world, ('source', 'location', 'badges', 'owned_hms', 'trail'))
@@ -52,6 +56,7 @@ def planner_context(payload):
     result['hm_journey'] = compact(select(hm, ('instruction', 'active', 'pending')))
     result['prerequisites'] = compact(payload.get('prerequisites'))
     result['party'] = compact((payload.get('team') or {}).get('party', []))
+    result['battle'] = compact(payload.get('battle') or {'kind': 'none'})
     # Candidate IDs are never shortened: the executor validates them verbatim.
     # Reserve space for the prompt, schema, image tokens and response in 8K KV.
     while len(json.dumps(result, ensure_ascii=False)) > 6500:
@@ -74,6 +79,8 @@ def planner_context(payload):
                 result['candidates'].pop()
             elif result.get('failed_attempts'):
                 result['failed_attempts'].pop(0)
+            elif result.get('battle', {}).get('kind') == 'none':
+                result.pop('battle', None)
             elif result.get('prerequisites'):
                 result['prerequisites'] = None
             elif result.get('clues'):

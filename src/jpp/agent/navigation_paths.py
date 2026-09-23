@@ -5,6 +5,7 @@ from functools import lru_cache
 from itertools import count
 
 from .gold97_navigation import STEPS
+from ..gold97_collision import _WALL, _WATER
 
 
 class ReachablePaths(dict):
@@ -26,11 +27,19 @@ def paths(state, memory, terrain, *, prefer_new=True):
     from .discovery import known_exits
     portals = frozenset(tuple(e[:2]) for e in known_exits(state, terrain))
     return _paths(origin, state.map_width, state.map_height, terrain, blocked, objects,
-                  edge_costs(memory, key) if prefer_new else (), portals)
+                  edge_costs(memory, key) if prefer_new else (), portals,
+                  bool(terrain.tile(origin) in _WATER and _surf_ready(state)))
+
+
+def _surf_ready(state):
+    from ..field_moves import field_ready
+    return (field_ready(state, 'Surf') and any(
+        'SURF' in {move.upper().replace('_', ' ') for move in getattr(mon, 'moves', ())}
+        for mon in getattr(state, 'party', ())))
 
 
 @lru_cache(maxsize=32)
-def _paths(origin, width, height, terrain, blocked, objects, costs=(), portals=frozenset()):
+def _paths(origin, width, height, terrain, blocked, objects, costs=(), portals=frozenset(), surfing=False):
     prices = {(tuple(p), d): count for stamp, count in costs for p, d in [json.loads(stamp)]}
     found, distances = {origin: None}, {origin: 0}
     serial = count()
@@ -43,7 +52,9 @@ def _paths(origin, width, height, terrain, blocked, objects, costs=(), portals=f
             target = point[0] + dx, point[1] + dy
             if (target in objects or (point, direction) in blocked
                     or not (0 <= target[0] < width and 0 <= target[1] < height)
-                    or terrain is None or not terrain.allows(target, direction)):
+                    or terrain is None or not (terrain.allows(target, direction)
+                       or surfing and terrain.tile(target) in _WATER
+                       and terrain.tile(target) not in _WALL)):
                 continue
             price = cost + 1 + min(6, prices.get((point, direction), 0))
             if price < distances.get(target, float('inf')):

@@ -42,7 +42,8 @@ def test_missing_person_detour_survives_replanning_and_changed_approach(controll
     target = dict(id=identifier, kind='explore', map='09:02', cell=[1, 1],
                   direction='right', reobserve_interaction=True, label='Recheck person')
     strategy.target = target
-    strategy.observe(s, (), True)
+    for _ in range(24):
+        strategy.observe(s, (), True)
     assert strategy.target is None
     assert not allowed_targets(controller.memory, controller.route.now, [target])
     alternate = {**target, 'cell': [2, 1], 'direction': 'left'}

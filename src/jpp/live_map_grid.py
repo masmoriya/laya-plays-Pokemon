@@ -70,6 +70,10 @@ class MapGrid:
                         and (seen is None or start in seen and end in seen)):
                     pygame.draw.line(self.ui.canvas, TEXT, center(*start), center(*end), 1)
             draw_objects(self.ui, snapshot, center)
+            from .live_map_markers import draw_marker
+            for x, y, *_ in snapshot.exits:
+                if 0 <= x < terrain.width and 0 <= y < terrain.height:
+                    draw_marker(self.ui, center(x, y), 'warp', visible=False)
             destination = snapshot.destination
             if destination and destination[0] == terrain.map_key:
                 x, y = destination[1]

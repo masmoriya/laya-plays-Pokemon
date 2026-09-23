@@ -11,13 +11,13 @@ def test_local_launch_overrides_saved_disabled_planner(controller):
     controller.strategy.data['enabled'] = False
     planner = LocalJourneyProvider()
     strategy = JourneyStrategy(controller, planner, enabled=True)
-    assert strategy.enabled and strategy.shared_control and not strategy.required
+    assert strategy.enabled and not strategy.shared_control and strategy.required
     assert strategy.summary()['planner'] == 'Qwen'
     disabled = JourneyStrategy(controller, planner, enabled=False)
     assert not disabled.enabled
 
 
-def test_priority_target_moves_while_qwen_plans_then_hands_off(controller, monkeypatch):
+def test_qwen_holds_movement_until_current_plan_is_ready(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
     strategy.data['enabled'] = True
@@ -32,7 +32,7 @@ def test_priority_target_moves_while_qwen_plans_then_hands_off(controller, monke
     monkeypatch.setattr('jpp.agent.journey_async.candidates', lambda *a, **k: [candidate, alternative])
     pending = Future()
     monkeypatch.setattr(controller.executor, 'submit', lambda *a, **k: pending)
-    assert strategy.options(s, terrain)
+    assert strategy.options(s, terrain) == {}
     assert strategy.target is None
     assert strategy.future is pending
     assert controller.latest_model_input['provider'] == 'Qwen'
@@ -47,7 +47,7 @@ def test_priority_target_moves_while_qwen_plans_then_hands_off(controller, monke
     assert strategy.summary()['last_response']['explanation'] == 'Follow the observed lead'
 
 
-def test_qwen_failure_keeps_legal_local_movement_and_retries(controller, monkeypatch):
+def test_qwen_failure_holds_movement_and_retries(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
     strategy.data['enabled'] = True
@@ -57,15 +57,15 @@ def test_qwen_failure_keeps_legal_local_movement_and_retries(controller, monkeyp
     failed = Future()
     failed.set_exception(RuntimeError('Model unavailable'))
     strategy.future = failed
-    assert strategy.options(s, terrain)
-    assert strategy.status == 'Laya fallback'
+    assert strategy.options(s, terrain) == {}
+    assert strategy.status == 'retrying'
     assert strategy.target is None
     assert strategy.data['plan'] is None
-    assert strategy.options(s, terrain)
+    assert strategy.options(s, terrain) == {}
     strategy.retry_at = 0
     pending = Future()
     monkeypatch.setattr(controller.executor, 'submit', lambda *a, **k: pending)
-    assert strategy.options(s, terrain)
+    assert strategy.options(s, terrain) == {}
     assert strategy.future is pending
 
 
@@ -99,20 +99,59 @@ def test_planner_dispatch_includes_copied_game_frame(controller, monkeypatch):
     s = state()
     strategy.observe(s, (sprite(),), True)
     controller.planning_frame = np.zeros((144, 160, 4), dtype=np.uint8)
+    controller.map_state.update(
+        s, Gold97CollisionMap((9, 2), 6, 6, bytes(36)), ready=True, overworld=True)
     calls = []
     pending = Future()
     def submit(*args):
         calls.append(args)
         return pending
     monkeypatch.setattr(controller.executor, 'submit', submit)
-    assert strategy.options(s, Gold97CollisionMap((9, 2), 6, 6, bytes(36)))
+    assert strategy.options(s, Gold97CollisionMap((9, 2), 6, 6, bytes(36))) == {}
     assert calls[0][0] == strategy.provider.plan_visual
     assert calls[0][2] is not controller.planning_frame
+    assert calls[0][4] is not None  # Qwen also receives the full navigation overview.
+    assert controller.latest_model_input['context']['map_overview']['attached']
     assert controller.live.vision['status'] == 'analyzing'
     assert controller.live.vision['frame'].shape == (144, 160, 4)
     strategy.provider_failed('Vision unavailable')
     assert controller.live.vision['status'] == 'error'
     assert strategy.summary()['error'] == 'Vision unavailable'
+
+
+def test_retired_plan_is_not_reported_as_a_vision_failure(controller):
+    import numpy as np
+    live = controller.live
+    live.vision_started(np.zeros((144, 160, 4), dtype=np.uint8), {'state': {}})
+    live.vision_retired('Navigation state changed; reply retired')
+    assert live.vision['status'] == 'retired'
+    assert live.vision['error'] == ''
+    assert live.vision['result']['uncertainty'] == 'Navigation state changed; reply retired'
+
+
+def test_qwen_plan_payload_contains_current_frame_as_image(monkeypatch):
+    import numpy as np
+    from PIL import Image
+    provider = LocalJourneyProvider()
+    captured = {}
+    def structured(messages, schema, max_tokens):
+        captured.update(messages=messages, schema=schema, max_tokens=max_tokens)
+        return {'target': 'exit:next', 'explanation': 'Follow the observed exit',
+                'evidence': ['exit:next'], 'completion': 'Observe arrival'}, {}
+    monkeypatch.setattr(provider.client, 'structured', structured)
+    payload = {'goal': 'Reach the next town', 'map': 'Route 118',
+               'candidates': [{'id': 'exit:next', 'kind': 'exit', 'label': 'Go north',
+                               'completion': 'Arrive at the next town'}]}
+    frame = np.zeros((144, 160, 4), dtype=np.uint8)
+    plan, _ = provider.plan_visual(payload, frame, map_overview=Image.new('RGB', (32, 16), 'black'))
+    user_content = captured['messages'][0]['content']
+    assert plan['target'] == 'exit:next'
+    assert user_content[0]['type'] == 'text'
+    image_parts = [part for part in user_content if part['type'] == 'image_url']
+    assert len(image_parts) == 2
+    assert 'Top-down observed map overview' in user_content[2]['text']
+    image_part = image_parts[1]
+    assert image_part['image_url']['url'].startswith('data:image/png;base64,')
 
 
 def test_backend_world_party_and_map_survive_context_pressure(controller):
@@ -123,7 +162,9 @@ def test_backend_world_party_and_map_survive_context_pressure(controller):
     s.pokedex_seen_ids = (1, 2, 3)
     s.owned_hms = ('Cut',)
     s.party = (SimpleNamespace(species='VOLBEAR', level=26, hp=74,
-                               max_hp=80, status=None, moves=('CUT',)),)
+                               max_hp=80, status=None, moves=('CUT',),
+                               types=('NORMAL',), stats=(55, 40, 36, 44, 45),
+                               pp=(25,), max_pp=(25,), held_item='BERRY'),)
     controller.strategy.observe(s, (), True)
     payload = controller.strategy.context(s)
     payload['candidates'] = [{'id': f'c:{i}', 'label': 'route' * 60,
@@ -132,6 +173,13 @@ def test_backend_world_party_and_map_survive_context_pressure(controller):
     payload['recent'] = ['old history' * 1000] * 30
     payload['navigation'] = {'position': [1, 1], 'fresh': True,
                              'exits': [[5, 1, 'right', 9, 7]]}
+    payload['travel'] = {'destination': 'Rocket Ship Base', 'next_map': '13:0D',
+                         'next_stop': 'Rocket Ship Base', 'route': [],
+                         'exits': [{'to': '13:0D', 'name': 'Rocket Ship Base',
+                                    'cell': [13, 5], 'direction': 'down'}]}
+    payload['battle'] = {'kind': 'trainer', 'active': {'species': 'VOLBEAR',
+                             'hp': 74, 'max_hp': 80, 'moves': ['CUT'], 'stats': [55,40,36,44,45]},
+                        'opponent': {'species': 'BUGSYMON', 'hp': 20, 'max_hp': 20}}
     bounded = LocalJourneyProvider().model_input(payload)['state']
     assert bounded['world']['location']['position'] == [1, 1]
     assert bounded['world']['journey']['current'] == 6
@@ -139,7 +187,12 @@ def test_backend_world_party_and_map_survive_context_pressure(controller):
     assert bounded['world']['pokedex']['seen_count'] == 3
     assert bounded['party'][0]['moves'] == ['CUT']
     assert bounded['party'][0]['max_hp'] == 80
+    assert bounded['party'][0]['stats'] == [55, 40, 36, 44, 45]
+    assert bounded['party'][0]['max_pp'] == [25]
+    assert bounded['battle']['opponent']['species'] == 'BUGSYMON'
+    assert bounded['travel']['exits'][0]['cell'] == [13, 5]
     assert bounded['navigation']['exits'] == [[5, 1, 'right', 9, 7]]
+    assert 'travel cost' in LocalJourneyProvider().model_input(payload)['prompt']
 
 
 def test_verified_mine_guidance_reaches_local_planner(controller):
@@ -161,6 +214,7 @@ def test_verified_mine_guidance_reaches_local_planner(controller):
 def test_stale_completed_plan_cannot_override_laya(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
+    strategy.provider.shared_control = True
     strategy.data['enabled'] = True
     s = state()
     strategy.observe(s, (sprite(),), True)
@@ -216,6 +270,7 @@ def test_protected_memory_survives_qwen_context_pressure():
 def test_late_qwen_target_does_not_reverse_a_committed_route(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
+    strategy.provider.shared_control = True
     strategy.data['enabled'] = True
     s = state()
     s.map_exits = ((0, 1, 'left', 9, 1), (5, 1, 'right', 9, 7))
@@ -240,6 +295,7 @@ def test_late_qwen_target_does_not_reverse_a_committed_route(controller, monkeyp
 def test_same_map_waypoint_completion_preserves_pending_request(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
+    strategy.provider.shared_control = True
     strategy.data['enabled'] = True
     s = state()
     strategy.observe(s, (), True)
@@ -255,6 +311,7 @@ def test_same_map_waypoint_completion_preserves_pending_request(controller, monk
 def test_pending_request_is_immutable_while_local_target_moves(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
+    strategy.provider.shared_control = True
     strategy.data['enabled'] = True
     s = state()
     strategy.observe(s, (sprite(),), True)
@@ -268,7 +325,7 @@ def test_pending_request_is_immutable_while_local_target_moves(controller, monke
     assert original['cell'] == cell
 
 
-def test_context_failure_is_visible_and_keeps_local_controls(controller, monkeypatch):
+def test_context_failure_is_visible_and_holds_movement(controller, monkeypatch):
     strategy = controller.strategy
     strategy.provider = LocalJourneyProvider()
     strategy.data['enabled'] = True
@@ -276,6 +333,6 @@ def test_context_failure_is_visible_and_keeps_local_controls(controller, monkeyp
     def too_large(payload):
         raise ValueError('Context exceeds budget')
     monkeypatch.setattr(strategy.provider, 'model_input', too_large)
-    assert strategy.options(state(), Gold97CollisionMap((9, 2), 6, 6, bytes(36)))
+    assert strategy.options(state(), Gold97CollisionMap((9, 2), 6, 6, bytes(36))) == {}
     assert strategy.future is None
     assert 'Context exceeds budget' in strategy.summary()['error']

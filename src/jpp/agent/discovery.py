@@ -10,6 +10,9 @@ class ObservedTerrain(Gold97CollisionMap):
     exits: tuple = ()
     known_edges: frozenset = frozenset()
     visible_objects: frozenset = frozenset()
+    # Preserve collision-verified cartridge data for prerequisite planning
+    # (such as Surf) while tile()/allows() remain visibility-gated for travel.
+    collision: object = None
 
     def tile(self, point):
         return super().tile(point) if tuple(point) in self.seen else None
@@ -67,7 +70,8 @@ def observe_terrain(memory, state, terrain, overworld):
                            seen=frozenset(seen), visible=visible,
                            visible_objects=frozenset(getattr(terrain, "entity_cells", ()) or visible) if overworld else frozenset(),
                            exits=tuple(tuple(e) for e in discovery['exits']),
-                           known_edges=frozenset((tuple(p), d) for p, d in area.get('edges', ())))
+                           known_edges=frozenset((tuple(p), d) for p, d in area.get('edges', ())),
+                           collision=terrain)
 
 
 def known_exits(state, terrain):

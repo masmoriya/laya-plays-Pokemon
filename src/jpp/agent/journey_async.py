@@ -50,7 +50,11 @@ class JourneyAsync:
             return
         current = candidates(state, self.owner.memory, terrain,
                              excluded=self.excluded, reward_weights=self.owner.rewards.weights)
-        current = allowed_targets(self.owner.memory, self.owner.route.now, current)
+        from .travel_atlas import travel_context
+        travel = travel_context(state, self.owner.route.now)
+        required_next_map = travel.get('next_map') if travel else None
+        current = allowed_targets(self.owner.memory, self.owner.route.now, current,
+                                  preserve_cycles_to=required_next_map)
         target = next((c for c in current if c['id'] == plan['target']), None)
         if target is None:
             # Moving the camera can change the representative frontier shortlist
@@ -61,7 +65,8 @@ class JourneyAsync:
             if (submitted_target['kind'] == 'explore' and submitted_target['cell'] not in visited
                     and not submitted_target.get('reobserve_interaction')
                     and submitted_target['id'] not in self.excluded
-                    and allowed_targets(self.owner.memory, self.owner.route.now, [submitted_target])
+                    and allowed_targets(self.owner.memory, self.owner.route.now, [submitted_target],
+                                        preserve_cycles_to=required_next_map)
                     and unexhausted(self.owner.memory, [submitted_target])
                     and target_options(submitted_target, state, self.owner.memory, terrain)):
                 target = submitted_target
@@ -72,7 +77,7 @@ class JourneyAsync:
             self.owner.memory.experience.record('planner_rejected', plan=plan,
                                                 plan_id=getattr(self, 'plan_id', None), reason=reason)
             if getattr(self, 'plan_has_image', False):
-                self.owner.live.vision_finished(error=reason)
+                self.owner.live.vision_retired(reason)
             self.status = 'reconsidering'
             return
         if preserves_commitment(self.target, target, state, self.owner.memory, terrain):

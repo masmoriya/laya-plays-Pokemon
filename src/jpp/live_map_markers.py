@@ -6,10 +6,17 @@ from .live_ui_colors import BG, TEXT, WARN, GOOD
 def draw_marker(ui, center, category, outcome='seen', visible=True):
     x, y = center
     resolved = outcome in {'collected', 'harvested', 'exhausted', 'defeated', 'conversed', 'moved'}
-    color = GOOD if resolved else WARN if visible else TEXT
+    color = ((85, 216, 208) if category == 'mapped_exit' else
+             GOOD if resolved else WARN if visible else TEXT)
     pygame.draw.circle(ui.canvas, BG, center, 5)
     width = 0 if visible else 1
-    if category in {'item', 'resource'}:
+    if category in {'warp', 'mapped_exit'}:
+        route = category == 'mapped_exit'
+        pygame.draw.polygon(ui.canvas, color, [(x,y-5),(x+5,y),(x,y+5),(x-5,y)],
+                            1 if route or not visible else 0)
+        if not route and outcome not in {'seen', 'unknown'}:
+            pygame.draw.circle(ui.canvas, BG, center, 1)
+    elif category in {'item', 'resource'}:
         pygame.draw.polygon(ui.canvas, color, [(x,y-4),(x+4,y),(x,y+4),(x-4,y)], width)
     elif category == 'obstacle':
         pygame.draw.rect(ui.canvas, color, pygame.Rect(x-3,y-3,7,7), width)

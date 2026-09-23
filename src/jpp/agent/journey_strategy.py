@@ -43,6 +43,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning, JourneyAsync):
         self.plan_started_at = 0
         self.last_transition_target = None
         self.recovery_retry_at = 0
+        self.empty_retry_keys = set()
 
     @property
     def label(self):
@@ -50,7 +51,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning, JourneyAsync):
 
     @property
     def required(self):
-        return self.enabled and getattr(self.provider, 'required', False) and not self.shared_control
+        return self.enabled and getattr(self.provider, 'required', False)
 
     @property
     def data(self):
@@ -85,7 +86,7 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning, JourneyAsync):
             self.owner.memory.experience.record('planner_rejected',
                 plan_id=getattr(self, 'plan_id', None), reason='Navigation state invalidated')
             if getattr(self, 'plan_has_image', False):
-                self.owner.live.vision_finished(error='Navigation state changed; reply retired')
+                self.owner.live.vision_retired('Navigation state changed; reply retired')
             if not self.future.cancel():
                 self.retired.append(("plan", self.future))
         if not preserve_pending:
@@ -155,6 +156,23 @@ class JourneyStrategy(JourneyObservation, JourneyPlanning, JourneyAsync):
             self.reconsider_interaction(state, terrain, durable)
         self.poll_plan(state, terrain)
         if self.target:
+            if (self.target.get('surf_activation')
+                    and self.position == self.target.get('cell')):
+                direction = self.target['direction']
+                if getattr(state, 'player_facing', None) != direction:
+                    return {direction: 'Face the verified water crossing'}
+                npc = {'id': self.target['id'], 'map': self.target['map'],
+                       'cell': list(self.position), 'pages': ['Verified water route'],
+                       'status': 'pending', 'outcome': 'unresolved',
+                       'visible': True, 'observed': True, 'category': 'obstacle'}
+                if self.field_action.start(state, npc, self.owner.memory,
+                                           preferred_move='SURF', direction=direction):
+                    self.owner._set_provider_event(
+                        f'Using learned Surf to cross toward {self.target.get("destination", "the route")}')
+                    return {}
+                self.field_action.error = 'Surf route is reachable but field activation was unavailable'
+                self.failed(self.field_action.error)
+                return {}
             result = target_options(self.target, state, self.owner.memory, terrain,
                                     self.observations.pending)
             if result:

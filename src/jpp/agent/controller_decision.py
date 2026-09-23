@@ -71,6 +71,13 @@ class DecisionExecution(DecisionChoice):
             if self.vision is not None and self.stalls >= 2:
                 map_note = self._screen(state, frame)
             options = probe_options(state, self.memory, map_note)
+        if (strategy_active and self.strategy.required and self.strategy.future
+                and not self.strategy.future.done()):
+            # Qwen owns route choice for this observation. Do not send concurrent
+            # tactical requests while its image-grounded plan is outstanding.
+            self.held_action = None
+            self.last = None
+            return None
         if not options:
             self.no_options_frames += 1
             if (overworld and not state.in_battle and self.no_options_frames >= 60):

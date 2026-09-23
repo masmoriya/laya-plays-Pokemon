@@ -31,15 +31,19 @@ def same_approach(target, failed, reason):
     from .experience import target_key
     if (failed.get('kind') == 'explore' and target.get('id') == failed.get('id')
             and (target.get('reobserve_interaction') or target.get('kind') == 'talk')):
-        return target_key(target) == target_key(failed)
-    if (target.get('id') is not None and target.get('id') == failed.get('id')) or target_key(target) == target_key(failed):
+        # A different camera approach is not new evidence that the same
+        # last-seen person is present. Experience.failures releases this only
+        # after that identity is observed again.
         return True
     if (target.get('kind') == failed.get('kind') == 'exit'
             and target.get('map') == failed.get('map')
             and target.get('cell') == failed.get('cell')
             and target.get('direction', '') == failed.get('direction', '')):
-        return True  # Geometry, atlas, and observed aliases share an activation.
-    # Only a cycle, not a blocked tile, implicates the adjacent entrance.
+        return True
+    if (target.get('id') is not None and target.get('id') == failed.get('id')) or target_key(target) == target_key(failed):
+        return True
+    # A transition budget groups adjacent tiles at one physical portal, while
+    # a persisted failed approach must not suppress neighboring exits.
     if 'cycle' not in reason.lower() and 'repeated movement' not in reason.lower():
         return False
     a, b = target.get('cell'), failed.get('cell')
@@ -51,10 +55,19 @@ def same_approach(target, failed, reason):
             and abs(a[0]-b[0]) + abs(a[1]-b[1]) <= 1)
 
 
-def allowed_targets(memory, goal, targets):
+def allowed_targets(memory, goal, targets, *, preserve_cycles_to=None):
     failures = memory.experience.failures(goal)
     return [target for target in targets if not any(
-        same_approach(target, failed_target(item), item['reason']) for item in failures)]
+        not (preserve_cycles_to and target.get('kind') == 'exit'
+             and target.get('destination_key') == preserve_cycles_to
+             and ('cycle' in item['reason'].casefold()
+                  or 'repeated movement' in item['reason'].casefold()))
+        and
+        same_approach(target, failed_target(item), item['reason'])
+        and (item.get('evidence_stamp') == evidence_stamp(memory, goal, item.get('map'))
+             if item.get('evidence_stamp') is not None
+             else item.get('goal') == goal)
+        for item in failures)]
 
 
 def navigation_memory(strategy, state, targets=None):

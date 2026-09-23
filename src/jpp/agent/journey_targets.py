@@ -135,16 +135,35 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
                            "label": "Return toward Pagota via the tower exit",
                            "source": "Gold 97 v6.1c cartridge map events: gold97_services.py",
                            "completion": "Observe a map transition"})
-    from .travel_atlas import atlas_exits
-    mapped = [t for t in atlas_exits(state, reachable, excluded, terrain) if not exit_blocked(t, memory)]
+    from .travel_atlas import atlas_exits, next_route_waypoint, travel_context
+    travel = travel_context(state, milestone)
+    mapped = [t for t in atlas_exits(
+        state, reachable, excluded, terrain,
+        required_destination=travel.get('next_map') if travel else None)
+        if not exit_blocked(t, memory)]
     mapped_cells = {tuple(t['cell']) for t in mapped}
     result = [t for t in result if not (t['kind'] == 'exit' and
               t.get('destination_key') == '00:00' and tuple(t['cell']) in mapped_cells)]
     result.extend(mapped)
+    if travel and travel.get('next_map'):
+        from .surf_navigation import surf_exit_candidate
+        surf = surf_exit_candidate(state, memory, terrain, reachable,
+                                  travel['next_map'], (reward_weights or DEFAULT_WEIGHTS)['milestone'])
+        if surf and surf['id'] not in excluded:
+            result.append(surf)
+        if not any(target.get('destination_key') == travel['next_map']
+                   or target.get('route_destination') == travel['next_map']
+                   for target in result):
+            waypoint = next_route_waypoint(
+                reachable, state, memory, terrain, travel['next_map'],
+                (reward_weights or DEFAULT_WEIGHTS)['milestone'], excluded)
+            if waypoint:
+                result.append(waypoint)
     weights = reward_weights or DEFAULT_WEIGHTS
     result = [item for item in result if target_key(item) not in excluded
               or item.get("category") in {"item", "obstacle"}]
-    ranked = rank_candidates(result, goal, weights["milestone"], state.area_name)
+    ranked = rank_candidates(result, goal, weights["milestone"], state.area_name,
+                             traveling=bool(travel and travel.get('next_map')))
     goal_maps = set(data["route_maps"].get(str(milestone), ()))
     for target in ranked:
         destination = target.get("destination_key")
@@ -158,8 +177,10 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
             target["journey_reward"] += weights["discovery"]
             target["reward_reason"] += "; new map for the current Journey milestone"
     ranked.sort(key=lambda target: -target.get("journey_reward", 0))
+    required_next_map = travel.get('next_map') if travel else None
     from .journey_routes import rank_known_routes
-    ranked = rank_known_routes(ranked, state, memory, goal, weights['milestone'])
+    ranked = rank_known_routes(ranked, state, memory, goal, weights['milestone'],
+                               required_next_map=required_next_map)
     ranked = rank_prerequisites(ranked, state, milestone, weights['milestone'])
     from .exploration_cycles import filter_cycles
     from .journey_guidance import rank_interactions
@@ -170,15 +191,19 @@ def candidates(state, memory, terrain, *, excluded=(), reward_weights=None):
     ranked = rank_preparation(ranked, state, milestone, weights['milestone'], memory)
     from .mine_guidance import rank_rescue
     ranked = rank_rescue(ranked, weights['milestone'])
-    from .travel_atlas import rank_travel, rank_travel_frontier
+    from .travel_atlas import rank_travel, rank_collision_frontier
     from .passage_navigation import mark_entry_returns
-    ranked = mark_entry_returns(ranked, memory, state, milestone)
+    ranked = mark_entry_returns(ranked, memory, state, milestone,
+                                required_next_map=required_next_map)
     ranked = rank_travel(ranked, state, milestone, weights['milestone'], memory)
-    if getattr(terrain, 'seen', None) is not None:
-        ranked = rank_travel_frontier(ranked, state, milestone, weights['milestone'], memory)
+    # Gold97CollisionMap exposes verified collision bytes as ``tiles``.  It
+    # has no ``seen`` attribute, so gate frontier planning on that live contract.
+    ranked = rank_collision_frontier(ranked, state, milestone,
+                                     weights['milestone'], memory, terrain)
     from .navigation_trace import unexhausted
     from .navigation_memory import allowed_targets, target_evidence
-    ranked = allowed_targets(memory, milestone, ranked)
+    ranked = allowed_targets(memory, milestone, ranked,
+                             preserve_cycles_to=required_next_map)
     for target in ranked:
         target['destination_evidence'] = target_evidence(target, memory)
     ranked = unexhausted(memory, filter_cycles(prefer_discovery(ranked, memory), memory))

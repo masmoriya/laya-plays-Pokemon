@@ -8,7 +8,7 @@ from jpp.gold97_collision import Gold97CollisionMap
 from jpp.live_map_grid import cell_kind
 from jpp.live_map_state import LiveMapState
 from jpp.live_ui import LiveUI, SIZE
-from jpp.live_ui_colors import BG, GOOD, MUTED, WARN
+from jpp.live_ui_colors import BG, GOOD, MUTED, PANEL, WARN
 from jpp.terrain_capture import OverworldSprite
 
 
@@ -122,6 +122,37 @@ def test_goal_entities_clipping_and_cache(ui):
     assert ui.canvas.get_clip() == clip
 
 
+def test_grid_does_not_paint_unseen_collision_warps_over_the_terrain(ui):
+    st = state(map_group=254, map_number=237, map_width=4, map_height=3)
+    tiles = bytearray(12)
+    tiles[1 * 4 + 1] = 0x70
+    collision = Gold97CollisionMap((254, 237), 4, 3, bytes(tiles))
+    update(ui.map_state, st, collision)
+    view = pygame.Rect(0, 0, 400, 300)
+    ui.panels.map_panel.grid.draw(ui.map_state.snapshot, view)
+    assert ui.canvas.get_at((150, 150))[:3] == PANEL
+
+
+def test_navigation_overview_marks_observed_warps_and_mapped_next_gate():
+    from jpp.agent.navigation_overview import render_navigation_overview
+
+    class Memory:
+        def map(self, _key):
+            return {'visited': []}
+
+    st = state(map_group=0x13, map_number=0x09, map_width=20, map_height=36,
+               x=9, y=23)
+    tiles = bytearray(20 * 36)
+    tiles[5 * 20 + 13] = 0x70
+    collision = Gold97CollisionMap((0x13, 0x09), 20, 36, bytes(tiles))
+    from jpp.agent.discovery import ObservedTerrain
+    observed = ObservedTerrain((0x13, 0x09), 20, 36, bytes(20 * 36),
+                               collision=collision)
+    image = render_navigation_overview(observed, st, Memory(), '13:0D')
+    assert image.getpixel((13 * 8 + 4, 5 * 8 + 4)) == (54, 215, 183)
+    assert image.getpixel((13 * 8 + 4, 5 * 8 + 1)) == (54, 215, 183)
+
+
 def test_modes_status_and_artwork_revision(ui):
     panel = ui.panels.map_panel
     labels = []
@@ -142,6 +173,20 @@ def test_modes_status_and_artwork_revision(ui):
     panel.draw(state(), journey)
     assert panel._terrain is not before
     assert panel._terrain.get_at((0, 0)) == (100, 120, 140, 255)
+
+
+def test_artwork_zooms_to_a_readable_neighborhood_around_the_player(ui):
+    panel = ui.panels.map_panel
+    st = state(map_width=20, map_height=36, x=9, y=23)
+    source = panel._source_rect(st, 40, 72)
+    assert source.size == (224, 160)
+    assert source.collidepoint(9 * 16 + 8, 23 * 16 + 8)
+    assert source.x > 0 and source.y > 0
+
+
+def test_artwork_keeps_small_maps_fully_visible(ui):
+    source = ui.panels.map_panel._source_rect(state(map_width=4, map_height=3), 8, 6)
+    assert source == pygame.Rect(0, 0, 64, 48)
 
 
 @pytest.mark.parametrize("width,height", [(4, 30), (30, 4), (1, 1)])

@@ -12,7 +12,7 @@ def gate(x=2):
                 goal_route=True, journey_reward=400)
 
 
-def test_cycle_failure_groups_adjacent_doors_but_not_other_exits(controller):
+def test_cycle_failure_excludes_only_the_failed_approach(controller):
     s = state()
     controller.strategy.observe(s, (), True)
     controller.memory.experience.fail(6, gate(), 'Repeated map cycle without new discoveries')
@@ -21,6 +21,22 @@ def test_cycle_failure_groups_adjacent_doors_but_not_other_exits(controller):
     assert allowed_targets(controller.memory, 7, [gate()])
     controller.memory.experience.retry(6)
     assert allowed_targets(controller.memory, 6, [gate(), gate(3)])
+
+
+def test_cycle_failure_does_not_hide_the_required_next_route_hop(controller):
+    controller.memory.experience.fail(6, gate(), 'Repeated map cycle without new discoveries')
+    assert allowed_targets(controller.memory, 6, [gate()], preserve_cycles_to='09:08') == [gate()]
+    assert not allowed_targets(controller.memory, 6, [gate()], preserve_cycles_to='09:07')
+
+
+def test_required_route_can_return_through_the_arrival_gate(controller):
+    from jpp.agent.passage_navigation import mark_entry_returns
+    controller.memory.world['navigation_arrival'] = {
+        'map': '09:02', 'from': '09:08', 'goal': 6, 'cell': [2, 1]}
+    target = gate()
+    assert mark_entry_returns([target], controller.memory, state(), 6,
+                              required_next_map='09:08') == [target]
+    assert not target.get('recent_return')
 
 
 def test_blocked_tile_does_not_exclude_neighboring_door(controller):
@@ -87,3 +103,23 @@ def test_destination_alias_cannot_bypass_failed_activation(controller):
     unknown = {**gate(), 'destination_key': '00:00', 'id': 'unknown'}
     controller.memory.experience.fail(6, unknown, 'Target is no longer reachable')
     assert not allowed_targets(controller.memory, 6, [gate()])
+
+
+def test_exhausted_failures_are_retried_once_per_position_and_evidence(controller, monkeypatch):
+    s = state()
+    controller.strategy.observe(s, (), True)
+    controller.memory.experience.fail(6, gate(), 'Repeated map cycle')
+    retries = []
+    original = controller.memory.experience.retry
+    def retry(goal):
+        retries.append(goal)
+        original(goal)
+    monkeypatch.setattr(controller.memory.experience, 'retry', retry)
+    monkeypatch.setattr('jpp.agent.journey_planning.candidates', lambda *a, **k: [])
+    monkeypatch.setattr(controller.strategy, 'recovery_candidates', lambda *a: [])
+    terrain = Gold97CollisionMap((9, 2), 6, 6, bytes(36))
+    controller.strategy.recovery_retry_at = 0
+    controller.strategy.plan_next(s, terrain, set())
+    controller.strategy.recovery_retry_at = 0
+    controller.strategy.plan_next(s, terrain, set())
+    assert retries == [6]

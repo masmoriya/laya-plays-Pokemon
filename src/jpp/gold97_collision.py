@@ -18,6 +18,11 @@ _WATER.update(range(192, 208))
 _HOPS = {0xA0: "right", 0xA1: "left", 0xA2: "up", 0xA3: "down"}
 
 
+def controller_state_ready(cache_ready, state, prompt_visible=False):
+    """Navigation waits for stable map collisions; battles and menus can run immediately."""
+    return bool(cache_ready or getattr(state, 'in_battle', False) or prompt_visible)
+
+
 @dataclass(frozen=True)
 class Gold97CollisionMap:
     map_key: tuple[int, int]

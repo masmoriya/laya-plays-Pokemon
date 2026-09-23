@@ -307,7 +307,9 @@ def test_current_milestone_rewards_new_route_and_penalizes_immediate_return(cont
     assert forward["journey_reward"] > stairs["journey_reward"]
     assert stairs["recent_return"]
     assert controller.strategy.options(s, terrain)
-    assert controller.strategy.target["destination_key"] == "09:01"
+    assert controller.strategy.target["destination_key"] == "0A:01"
+    assert controller.strategy.target["cell"] in ([0, 7], [1, 7])
+    assert controller.strategy.target["direction"] in ("left", "down")
     assert controller.strategy.future is None
 
 

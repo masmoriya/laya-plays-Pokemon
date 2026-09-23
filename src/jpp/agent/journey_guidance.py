@@ -27,7 +27,7 @@ def _place_terms(value):
     return {term for term in _terms(value) if not re.fullmatch(r'b?\d+f', term)}
 
 
-def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
+def rank_candidates(candidates, goal, milestone_reward=100, current_area="", *, traveling=False):
     """Rank progress opportunities using the configured milestone reward."""
     goal_terms = _terms(goal)
     area_terms = _place_terms(current_area)
@@ -86,7 +86,8 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
                     "within_goal": exact_destination and inside_goal,
                     "goal_interaction": candidate.get('goal_interaction', False)
                         or (objective_room and interaction
-                            and candidate.get('category') != 'obstacle'),
+                            and candidate.get('category') != 'obstacle'
+                            and not traveling),
                     "reward_reason": "; ".join(reasons), "_rank_order": order}
         ranked.append(enriched)
     ranked.sort(key=lambda item: (-item["journey_reward"], item["_rank_order"]))
@@ -96,7 +97,7 @@ def rank_candidates(candidates, goal, milestone_reward=100, current_area=""):
 
 
 def rank_interactions(targets, reward):
-    """Reachable people and pickups come before experimenting on obstacles."""
+    """Reward confirmed goals and pickups without turning unknown sprites into quests."""
     for target in targets:
         if (target['kind'] != 'talk' and not target.get('reobserve_interaction')) or target.get('journey_reward', 0) <= 0:
             continue
@@ -104,8 +105,14 @@ def rank_interactions(targets, reward):
         if category == 'obstacle':
             continue  # A cart is not automatically a prerequisite for every goal.
         pickup = category in {'item', 'resource'}
-        target['journey_reward'] = max(target['journey_reward'], reward * 3 if pickup else reward * 0.6)
         if pickup:
+            target['journey_reward'] = max(target['journey_reward'], reward * 3)
             target['investigation_priority'] = True
-        target['reward_reason'] = 'Reachable observed collectible' if pickup else 'Reachable unfinished conversation'
+            target['reward_reason'] = 'Reachable observed collectible'
+        elif target.get('goal_interaction'):
+            target['journey_reward'] = max(target['journey_reward'], reward * 0.6)
+            target['investigation_priority'] = True
+            target['reward_reason'] = 'Reachable interaction tied to the active objective'
+        else:
+            target['reward_reason'] = 'Unidentified lead; reward is limited until evidence connects it to the goal'
     return sorted(targets, key=lambda t: -t.get('journey_reward', 0))

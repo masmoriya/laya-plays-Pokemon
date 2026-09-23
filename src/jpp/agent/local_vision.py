@@ -47,7 +47,10 @@ class LocalScreenReader:
 class LocalJourneyProvider(JourneyStrategyProvider):
     label = "Qwen"
     required = True
-    shared_control = True
+    # Hold the current observation until Qwen's route decision is validated.
+    # Letting the tactical sidecar walk during a long vision request changes
+    # maps and retires every useful response before it can be applied.
+    shared_control = False
 
     def __init__(self):
         self.client = LocalModelClient()
@@ -59,8 +62,10 @@ class LocalJourneyProvider(JourneyStrategyProvider):
         bounded = planner_context(payload)
         request = super().model_input(bounded)
         request["prompt"] = (
-            "Choose the next reachable target to advance the journey goal. "
-            "Use backend world.location, journey, party, Pokedex, navigation and HM facts. "
+            "Choose the next reachable target after weighing the journey goal, map, evidence, "
+            "travel cost, exploration novelty and reward. Rewards are evidence, not an order to "
+            "ignore a clear forward route. Use backend world.location, journey, party, battle, "
+            "Pokedex, navigation, warp exits and HM facts. "
             "Coordinates and ownership come from decoded state, not guessed pixels. "
             "Use navigation_memory to avoid failed approaches. "
             "Unfinished interactions are leads, not completed tasks. Unknown identity is a reason "
@@ -79,6 +84,12 @@ class LocalJourneyProvider(JourneyStrategyProvider):
             "not proof that the rest of the map is explored or inaccessible. "
             "Pokedex caught is historical; only party confirms currently carried Pokemon. "
             "Follow travel.route toward travel.destination using reachable candidates. "
+            "The first image is the current game screen. The next image, when present, is the full "
+            "top-down map: dark cells are unseen, gray cells are known ground, brighter cells were "
+            "walked, yellow marks your current position, orange diamonds mark observed warp tiles, "
+            "cyan outlines mark mapped connections, and green marks the next mapped route gate. "
+            "Use the map and travel.exits to compare reachable routes, new areas, and detours; "
+            "a mapped connection is a lead to verify, not proof the door is open. "
             "Ordinary NPC chatter and sentence fragments are not unresolved story tasks. "
             "Use verified journey guidance and failed attempts. Avoid repeated "
             "conversations and routes without new evidence. The game image is observation, "
@@ -96,13 +107,17 @@ class LocalJourneyProvider(JourneyStrategyProvider):
     def plan(self, payload):
         return self.plan_visual(payload, None)
 
-    def plan_visual(self, payload, frame, dialogue_frames=()):
+    def plan_visual(self, payload, frame, dialogue_frames=(), map_overview=None):
         request = self.model_input(payload)
         start = time.monotonic()
         content = [{"type": "text", "text": request["prompt"]}]
         if frame is not None:
             content.append({"type": "image_url", "image_url": {
                 "url": image_url(Image.fromarray(frame[:, :, :3]))}})
+        if map_overview is not None:
+            content.extend([{"type": "text", "text": "Top-down observed map overview:"},
+                            {"type": "image_url", "image_url": {
+                                "url": image_url(map_overview)}}])
         for page in dialogue_frames:
             content.extend([{"type": "text", "text": "Earlier dialogue page (not the current screen):"},
                             {"type": "image_url", "image_url": {

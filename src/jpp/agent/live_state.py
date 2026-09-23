@@ -144,6 +144,13 @@ class LiveAgentState:
         self.vision["result"] = _plain(result)
         self.vision["error"] = str(error)[:180]
 
+    def vision_retired(self, reason):
+        if self.vision is None:
+            return
+        self.vision["status"] = "retired"
+        self.vision["result"] = {"mode": "planning", "uncertainty": str(reason)[:180]}
+        self.vision["error"] = ""
+
     def snapshot(self):
         return {
             "moves": [dict(item) for item in reversed(self.moves)],
