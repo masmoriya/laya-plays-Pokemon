@@ -51,6 +51,16 @@ def test_pc_and_party_reject_ambiguous_identities_and_last_battler():
     assert not ex.start(state((a, mon('b'))), 1)
 
 
+def test_party_reorder_does_not_reopen_visible_menu_or_retry_same_roster():
+    s = state((mon('a'), mon('b'), mon('c')))
+    ex = PartyReorder()
+    assert ex.start(s, 1)
+    s.screen_lines = ('POK DEX', 'POK MON', 'PACK', 'GEAR')
+    s.screen_cursor = (0, 0)
+    assert ex.step(s, True) == 'down'
+    assert not ex.start(state(s.party), 2)
+
+
 def test_roster_fills_slots_and_preserves_field_user_and_trainee():
     leader, trainee = mon('leader'), mon('trainee', level=5)
     swimmer = mon('surf', moves=('SURF',), types=('WATER',))

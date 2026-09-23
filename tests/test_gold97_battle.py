@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 from jpp.agent.gold97_battle import Gold97BattleStrategy
+from jpp.agent.gold97_battle import BattleAction
+from jpp.agent.gold97_battle_executor import BattleExecutor
 
 
 def mon(moves, pp, species="FLAMBEAR", types=()):
@@ -107,3 +109,47 @@ def test_strategy_does_not_delay_a_super_effective_attack_for_setup():
     foe = SimpleNamespace(species="CATERPIE", species_id=123, types=("GRASS",),
                            hp=20, max_hp=20)
     assert Gold97BattleStrategy().choose(active, foe) == 1
+
+
+def test_stalled_potion_menu_is_cancelled_and_not_reopened_for_same_battle_state():
+    active = mon(("TACKLE",), (5,))
+    active.hp, active.max_hp = 3, 22
+    foe = SimpleNamespace(species="PINSIR", species_id=127, types=("BUG",),
+                          hp=57, max_hp=59)
+    state = SimpleNamespace(mechanics_verified=True, active_slot=0,
+        battle=SimpleNamespace(kind="trainer", active=active, opponent=foe),
+        battle_menu_kind="text", battle_menu_cursor=None,
+        screen_cursor=(14, 8), screen_lines=("POTION", "", "X ACC USE", "ESC QUIT"),
+        potion_count=4, poke_ball_count=1)
+
+    class Planner:
+        def __init__(self):
+            self.events = []
+
+        def reset(self):
+            pass
+
+        def plan(self, state, **kwargs):
+            return BattleAction("heal", 0, "Heal: survive retaliation")
+
+        def attack(self, active, opponent):
+            return BattleAction("move", 0, "Attack after stalled healing")
+
+    owner = SimpleNamespace(battle_strategy=Planner(), battle_switch_phase=None,
+                            _set_provider_event=lambda message: None)
+    executor = BattleExecutor()
+    executor.action = BattleAction("heal", 0, "Heal: survive retaliation")
+    executor.phase = "heal"
+
+    for _ in range(47):
+        action = executor.step(owner, state)
+    assert action == "b"
+    assert executor.failed_heal_signature == executor.signature(state)
+
+    state.battle_menu_kind = "command"
+    state.battle_menu_cursor = (0, 0)
+    state.screen_cursor = None
+    state.screen_lines = ()
+    executor.step(owner, state)
+    assert executor.action.kind == "move"
+    assert executor.failed_heal_signature is None

@@ -24,6 +24,7 @@ class BattleExecutor:
         self.rejected_switch_active = None
         self.battle_kind = None
         self.opponent_species_id = None
+        self.failed_heal_signature = None
 
     def _publish_decision(self, owner, state):
         publish = getattr(owner, 'set_battle_decision', None)
@@ -112,6 +113,9 @@ class BattleExecutor:
         lines = tuple(getattr(state, 'screen_lines', ()) or ())
         text = ' '.join(' '.join(lines).upper().split())
         signature = self.signature(state)
+        if (self.failed_heal_signature is not None
+                and signature != self.failed_heal_signature):
+            self.failed_heal_signature = None
         frame = (menu, cursor, getattr(state, 'screen_cursor', None), lines, signature)
         self.repeats = self.repeats + 1 if frame == self.snapshot else 0
         self.snapshot = frame
@@ -123,6 +127,17 @@ class BattleExecutor:
             self.action = None
             self.confirmed = None
             return 'b' if active and active.hp > 0 else None
+        if (self.repeats > 45 and not self.recovered and menu == 'text'
+                and self.action is not None and self.action.kind == 'heal'):
+            # A frozen item submenu must not keep issuing the same cursor input
+            # or reopen the same failed heal on the next command menu.
+            self.recovered = True
+            self.failed_heal_signature = signature
+            self.action = None
+            self.confirmed = None
+            self.phase = None
+            owner._set_provider_event('Potion menu stopped responding; closing it and continuing the battle')
+            return 'b'
         # A freshly drawn menu may reject the first tap before input is ready.
         # Retry only after six unchanged observations, with a bounded deadline.
         if self.repeats and self.repeats % 6 == 0 and menu in {'command', 'moves', 'text', 'switch_prompt', 'forced_prompt', 'party_action', 'party'}:
@@ -311,6 +326,11 @@ class BattleExecutor:
                     return 'b'
             if self.action is None or self.phase == 'resolve':
                 self.action = self._plan(owner, state)
+                if (self.action.kind == 'heal'
+                        and signature == self.failed_heal_signature):
+                    self.action = owner.battle_strategy.attack(active, state.battle.opponent)
+                    owner._set_provider_event('Repeated Potion menu failure; choosing an attack')
+                    self.failed_heal_signature = None
                 self._publish_decision(owner, state)
             owner._set_provider_event(self.action.reason)
             if self.action.kind == 'wait':

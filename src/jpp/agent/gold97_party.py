@@ -30,9 +30,11 @@ class PartyReorder:
                 not 0 <= target < len(identities) or None in identities or
                 len(set(identities)) != len(identities)):
             return False
-        if (identities, target) in self.attempted:
+        # A failed menu parse must not make travel retry the same roster with
+        # a different target slot, reopening and closing Start indefinitely.
+        if identities in self.attempted:
             return False
-        self.attempted.add((identities, target))
+        self.attempted.add(identities)
         self.last, self.confirmed, self.repeats = None, None, 0
         self.target, self.before, self.phase = target, identities, 'open'
         self.error = ''
@@ -62,7 +64,12 @@ class PartyReorder:
             return 'b'
         if frame == self.confirmed and self.repeats % 6:
             return None
-        if overworld and self.phase in {'open', 'start'}:
+        menu_open = any(any(label in line.upper() for label in
+                            ('POK DEX', 'POK MON', 'POKEMON', 'PACK', 'GEAR', 'OPTION'))
+                        for line in getattr(state, 'screen_lines', ()))
+        if menu_open and self.phase in {'open', 'start'}:
+            self.phase = 'start'
+        if overworld and self.phase in {'open', 'start'} and not menu_open:
             self.phase = 'start'
             return 'start'
         if self.phase == 'start':
