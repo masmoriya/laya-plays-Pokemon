@@ -212,6 +212,28 @@ def test_checkpoint_journey_wins_over_stale_agent_route(owner, tmp_path, monkeyp
         journey.close()
 
 
+def test_custom_campaign_database_owns_its_journey_tables(tmp_path):
+    import json
+    import sqlite3
+    from jpp.journey import Journey
+
+    isolated = tmp_path / 'campaign.sqlite'
+    source = tmp_path / 'source.sqlite'
+    campaign = Journey('same-run', database=isolated)
+    campaign.route.completed.update(range(1, 22))
+    campaign.save_route()
+    campaign.close()
+    stale = Journey('same-run', database=source)
+    assert stale.route.completed == set()
+    stale.close()
+    with sqlite3.connect(isolated) as db:
+        saved = json.loads(db.execute(
+            "select payload from journey_route where run_id='same-run'").fetchone()[0])
+        assert len(saved['completed']) == 21
+    with sqlite3.connect(source) as db:
+        assert db.execute("select count(*) from journey_route").fetchone()[0] == 0
+
+
 def test_viewpoint_reveals_unknown_across_wall(owner):
     from jpp.agent.discovery import ObservedTerrain, frontier_cells
     # Reachable floor has known walls beside it, but moving the camera can

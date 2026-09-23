@@ -65,6 +65,7 @@ def run(
     provider_name=None,
     runtime_bridge=None,
     autoplay=None,
+    database=Path("data/jev.sqlite"),
 ):
     # Keep PyBoy and pygame on one SDL2 build on macOS. PyBoy otherwise loads
     # pysdl2-dll alongside pygame's bundled dylib and emits duplicate-class
@@ -98,7 +99,11 @@ def run(
     audio.set_muted(True)
     audio.set_speed(speed)
     store = RunStore(run_id=run_id)
-    journey = Journey(run_id)
+    # Agent memory and the checkpoint-owned journey route/map must share the
+    # explicitly selected database. Otherwise an isolated campaign can read a
+    # stale route snapshot from the default player database and overwrite the
+    # matching checkpoint notebook during restore.
+    journey = Journey(run_id, database=database)
     if state_path and not journey.restore_checkpoint(state_path):
         journey.reset_view()
     if not state_path and not resume and not native_save:
@@ -252,7 +257,7 @@ def run(
                 from .agent.factory import provider_from_env
                 from .agent.policy_adapter import ProviderPolicy
                 controller = Gold97Controller(
-                    run_id, save_encounter=lambda: save_agent("encounter"),
+                    run_id, database=database, save_encounter=lambda: save_agent("encounter"),
                     restore_encounter=restore_encounter,
                     restore_stuck=restore_stuck,
                     policy=ProviderPolicy(provider_from_env(provider_name)),
@@ -371,7 +376,7 @@ def run(
         from .agent.factory import provider_from_env
         from .agent.policy_adapter import ProviderPolicy
         controller = Gold97Controller(
-            run_id, save_encounter=lambda: save_agent("encounter"),
+            run_id, database=database, save_encounter=lambda: save_agent("encounter"),
             restore_encounter=restore_encounter,
             restore_stuck=restore_stuck,
             policy=ProviderPolicy(provider_from_env(provider_name)),

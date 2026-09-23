@@ -13,6 +13,8 @@ def add_parser(sub):
         "--run-id", default="laya-tested",
         help="checkpoint and memory namespace (default: laya-tested)",
     )
+    parser.add_argument("--database", type=Path, default=Path("data/jev.sqlite"),
+                        help="agent memory database (use a copied database for isolated runs)")
     parser.add_argument("--rules", default="config/game_rules.json")
     parser.add_argument("--player-name", help="override configured player name")
     parser.add_argument("--starter", help="preferred starter species, overrides rule order")
@@ -37,6 +39,6 @@ def add_parser(sub):
         from .live import run
         return run(args.rom, args.state, args.run_id, args.rules, args.player_name,
                    args.starter, args.game_adapter, args.speed, args.resume, args.native_save,
-                   provider, autoplay=False if args.manual else None)
+                   provider, autoplay=False if args.manual else None, database=args.database)
 
     parser.set_defaults(func=launch)
