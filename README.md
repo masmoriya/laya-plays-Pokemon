@@ -1,4 +1,4 @@
-# Laya Plays Pokémon
+# Laya Plays Pokemon
 
 > Local Laya control with Qwen vision for Pokémon Gold 97 Reforged.
 
@@ -13,8 +13,8 @@ the exact distinction between Laya, optional Luna, and hosted Jev, see
 [`docs/STREAM.md`](docs/STREAM.md).
 
 The public project landing page lives in the separate public repository:
-[masmoriya/laya-plays-pokemon](https://github.com/masmoriya/laya-plays-pokemon), with the
-live site at [masmoriya.github.io/laya-plays-pokemon](https://masmoriya.github.io/laya-plays-pokemon/).
+[masmoriya/laya-plays-Pokemon](https://github.com/masmoriya/laya-plays-Pokemon), with the
+live site at [masmoriya.github.io/laya-plays-Pokemon](https://masmoriya.github.io/laya-plays-Pokemon/).
 This repository stays private and contains the gameplay implementation and local assets.
 
 Pokemon Red played by a model that only outputs probabilities. Code reads the Game Boy's

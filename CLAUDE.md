@@ -1,4 +1,4 @@
-# Laya-Plays-Pokémon
+# Laya-Plays-Pokemon
 
 Pokemon Red on PyBoy: code decodes RAM into a symbolic state, owns the goal stack and
 waypoint movement, Jev picks among legal actions at branches. Live probability overlay.

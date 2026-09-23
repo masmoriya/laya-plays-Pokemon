@@ -1,6 +1,6 @@
 # Session prompt: brutal review, refinement, and the README
 
-Paste or point a fresh Claude Code session at this file from inside `Laya-Plays-Pokémon/`.
+Paste or point a fresh Claude Code session at this file from inside `Laya-Plays-Pokemon/`.
 
 ## Context to load first
 

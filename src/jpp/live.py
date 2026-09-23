@@ -77,7 +77,7 @@ def run(
     pre_init_audio()
     pygame.init()
     screen = pygame.display.set_mode(SIZE, pygame.RESIZABLE)
-    pygame.display.set_caption("Laya Plays Pokémon")
+    pygame.display.set_caption("Laya Plays Pokemon")
     checkpoints = CheckpointManager()
     emu = PyBoy(str(rom), window="null")
     emu.set_emulation_speed(0)
